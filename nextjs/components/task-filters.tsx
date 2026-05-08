@@ -14,19 +14,23 @@ import {
 interface TaskFiltersProps {
   statusFilter: TaskStatus | "ALL";
   searchQuery: string;
+  sortOrder: "priority" | "none";
   onStatusChange: (value: TaskStatus | "ALL") => void;
   onSearchChange: (value: string) => void;
+  onSortChange: (value: "priority" | "none") => void;
   onClear: () => void;
 }
 
 export function TaskFilters({
   statusFilter,
   searchQuery,
+  sortOrder,
   onStatusChange,
   onSearchChange,
+  onSortChange,
   onClear,
 }: TaskFiltersProps) {
-  const isFiltering = statusFilter !== "ALL" || searchQuery !== "";
+  const isFiltering = statusFilter !== "ALL" || searchQuery !== "" || sortOrder !== "none";
 
   return (
     <div className="flex items-center gap-3 mb-6">
@@ -42,6 +46,19 @@ export function TaskFilters({
           <SelectItem value="TODO">To Do</SelectItem>
           <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
           <SelectItem value="DONE">Done</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={sortOrder}
+        onValueChange={(v) => onSortChange(v as "priority" | "none")}
+      >
+        <SelectTrigger className="w-44">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">Sort: Default</SelectItem>
+          <SelectItem value="priority">Sort: Priority</SelectItem>
         </SelectContent>
       </Select>
 
