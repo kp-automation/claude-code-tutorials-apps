@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.project import Project, ProjectCreate, ProjectUpdate
 from app.schemas.label import Label, LabelCreate
+from app.schemas.task import Task
 from app.services.project_service import (
     get_projects,
     get_project,
@@ -10,6 +11,8 @@ from app.services.project_service import (
     update_project,
     delete_project,
 )
+from app.services.task_service import get_tasks, get_tasks_for_export
+from app.utils.csv_export import tasks_to_csv
 from app.utils.security import get_current_user
 from app.models.user import User
 from app.models.label import Label as LabelModel
@@ -61,6 +64,34 @@ def delete_project_by_id(
     """Delete a project"""
     delete_project(db, project_id, current_user)
     return None
+
+
+@router.get("/{project_id}/tasks", response_model=list[Task])
+def get_project_tasks(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get all tasks for a specific project"""
+    get_project(db, project_id, current_user)
+    return get_tasks(db, current_user, project_id)
+
+
+@router.get("/{project_id}/export")
+def export_project_tasks(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export all tasks in a project as a CSV file"""
+    get_project(db, project_id, current_user)
+    tasks = get_tasks_for_export(db, project_id, current_user)
+    csv_content = tasks_to_csv(tasks)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=tasks-{project_id}.csv"},
+    )
 
 
 # Intentional inconsistency: inline logic instead of service layer
