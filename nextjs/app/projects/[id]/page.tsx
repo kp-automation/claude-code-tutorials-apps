@@ -21,6 +21,7 @@ export default function ProjectDetailPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProject();
@@ -41,6 +42,11 @@ export default function ProjectDetailPage() {
   };
 
   const handleExport = async () => {
+    setExportMessage(null);
+    if (!project.tasks?.length) {
+      setExportMessage("No tasks to export.");
+      return;
+    }
     setIsExporting(true);
     try {
       const response = await fetch(`/api/projects/${params.id}/export`);
@@ -185,6 +191,9 @@ export default function ProjectDetailPage() {
           </Dialog>
           </div>
         </div>
+        {exportMessage && (
+          <p className="text-sm text-muted-foreground mt-2 text-right">{exportMessage}</p>
+        )}
       </div>
 
       <TaskBoard tasks={project.tasks} projectId={params.id as string} />
