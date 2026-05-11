@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, ArrowLeft } from "lucide-react";
+import { Plus, ArrowLeft, Download } from "lucide-react";
 import Link from "next/link";
 
 export default function ProjectDetailPage() {
@@ -19,6 +19,8 @@ export default function ProjectDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     fetchProject();
@@ -38,9 +40,30 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const response = await fetch(`/api/projects/${params.id}/export`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `tasks-${params.id}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.error("Export failed:", error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setCreateError(null);
 
     const formData = new FormData(e.currentTarget);
     const data = {
@@ -61,9 +84,19 @@ export default function ProjectDetailPage() {
         setIsDialogOpen(false);
         fetchProject();
         (e.target as HTMLFormElement).reset();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        const message = body?.error
+          ? typeof body.error === "string"
+            ? body.error
+            : "Invalid request. Please check your input."
+          : "Failed to create task. Please try again.";
+        console.error("Task creation failed:", { status: response.status, body });
+        setCreateError(message);
       }
     } catch (error) {
-      console.error("Failed to create task:", error);
+      console.error("Task creation error:", error);
+      setCreateError("Something went wrong. Check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -91,7 +124,12 @@ export default function ProjectDetailPage() {
               <p className="text-muted-foreground mt-1">{project.description}</p>
             )}
           </div>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleExport} disabled={isExporting}>
+              <Download className="h-4 w-4 mr-2" />
+              {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setCreateError(null); }}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />
@@ -136,12 +174,16 @@ export default function ProjectDetailPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                {createError && (
+                  <p className="text-sm text-destructive">{createError}</p>
+                )}
                 <Button type="submit" disabled={isSubmitting} className="w-full">
                   {isSubmitting ? "Creating..." : "Create Task"}
                 </Button>
               </form>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
       </div>
 
