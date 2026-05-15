@@ -1,0 +1,35 @@
+{
+  "feature": "<feature-slug>",
+  "current_stage": "spec",
+  "stages": [
+    {
+      "name": "spec",
+      "agent": "pm-spec",
+      "status": "pending",
+      "input": ".tasks/requests/<feature-slug>.md",
+      "output": ".tasks/specs/<feature-slug>.md"
+    },
+    {
+      "name": "review",
+      "agent": "architect-review",
+      "status": "pending",
+      "input": ".tasks/specs/<feature-slug>.md",
+      "output": ".tasks/reviews/<feature-slug>-review.md"
+    },
+    {
+      "name": "implement",
+      "agent": "implementer-tester",
+      "status": "pending",
+      "input": ".tasks/specs/<feature-slug>.md",
+      "output": "src/**"
+    },
+    {
+      "name": "validate",
+      "agent": "validator",
+      "status": "pending",
+      "input": "src/**",
+      "output": ".tasks/reviews/<feature-slug>-validation.md"
+    }
+  ],
+  "history": []
+}
