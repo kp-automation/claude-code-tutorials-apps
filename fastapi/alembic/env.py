@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import Base
 from app.config import settings
-from app.models import User, Project, Task, Comment, Label, TaskLabel
+from app.models import User, Project, Task, Comment, Label, TaskLabel, Notification, Tag, TimeEntry
 
 # this is the Alembic Config object
 config = context.config

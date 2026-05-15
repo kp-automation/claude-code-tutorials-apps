@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.project import Project, ProjectCreate, ProjectUpdate
 from app.schemas.label import Label, LabelCreate
+from app.schemas.time_entry import TimeReport
 from app.services.project_service import (
     get_projects,
     get_project,
@@ -10,6 +11,7 @@ from app.services.project_service import (
     update_project,
     delete_project,
 )
+from app.services.time_entry_service import get_project_time_report
 from app.utils.security import get_current_user
 from app.models.user import User
 from app.models.label import Label as LabelModel
@@ -90,3 +92,13 @@ def create_project_label(
     db.commit()
     db.refresh(label)
     return label
+
+
+@router.get("/{project_id}/time-report", response_model=list[TimeReport])
+def get_time_report(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get per-user time totals for all tasks in a project"""
+    return get_project_time_report(db, project_id, current_user)
