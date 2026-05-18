@@ -49,8 +49,15 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           </div>
           <div className="flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            <span>{new Date(task.updatedAt).toLocaleDateString()}</span>
+            <span>
+              {task.dueDate
+                ? new Date(task.dueDate).toISOString().slice(0, 10)
+                : "No due date"}
+            </span>
           </div>
+        </div>
+        <div className="text-xs text-muted-foreground mt-1">
+          {new Date(task.updatedAt).toLocaleDateString()}
         </div>
       </CardContent>
     </Card>
