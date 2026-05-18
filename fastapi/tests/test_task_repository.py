@@ -99,6 +99,36 @@ def test_get_all_no_status_filter_does_not_raise(repo, test_user, test_project):
     assert isinstance(result, list)
 
 
+def test_get_all_page1_returns_first_task(repo, test_user, test_project):
+    """Regression: page 1 must start at offset 0, not offset per_page (off-by-one fix).
+
+    Previously, `skip = page * per_page` with page=1 skipped the first per_page rows,
+    so any team with fewer tasks than per_page always received an empty list.
+    The fix is `skip = (page - 1) * per_page`.
+    """
+    task = repo.create(TaskCreate(title="First Task", project_id=test_project.id), test_user.id)
+
+    results = repo.get_all(test_user.id, page=1, per_page=20)
+    assert len(results) == 1
+    assert results[0].id == task.id
+
+
+def test_get_all_pagination_splits_correctly(repo, test_user, test_project):
+    """Page 1 and page 2 together return all tasks with no duplicates or gaps."""
+    for i in range(5):
+        repo.create(TaskCreate(title=f"Task {i}", project_id=test_project.id), test_user.id)
+
+    page1 = repo.get_all(test_user.id, page=1, per_page=3)
+    page2 = repo.get_all(test_user.id, page=2, per_page=3)
+
+    assert len(page1) == 3
+    assert len(page2) == 2
+    # No overlap between pages
+    ids1 = {t.id for t in page1}
+    ids2 = {t.id for t in page2}
+    assert ids1.isdisjoint(ids2)
+
+
 # ---------------------------------------------------------------------------
 # get_by_id
 # ---------------------------------------------------------------------------

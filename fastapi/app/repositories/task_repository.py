@@ -23,9 +23,7 @@ class TaskRepository:
             query = query.filter(Task.project_id == project_id)
         if status_filter is not None:
             query = query.filter(Task.status == status_filter.upper())
-        # Bug 2: off-by-one — page 1 skips the first `per_page` rows because the
-        # offset should be (page - 1) * per_page, not page * per_page.
-        skip = page * per_page
+        skip = (page - 1) * per_page
         return query.offset(skip).limit(per_page).all()
 
     def get_by_id(self, task_id: int, user_id: int) -> Optional[Task]:
