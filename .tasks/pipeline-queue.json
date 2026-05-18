@@ -1,0 +1,66 @@
+{
+  "feature": "untested-code",
+  "current_stage": "done",
+  "stages": [
+    {
+      "name": "spec",
+      "agent": "pm-spec",
+      "status": "completed",
+      "input": ".tasks/requests/untested-code.md",
+      "output": ".tasks/specs/untested-code.md"
+    },
+    {
+      "name": "review",
+      "agent": "architect-review",
+      "status": "completed",
+      "input": ".tasks/specs/untested-code.md",
+      "output": ".tasks/reviews/untested-code-review.md"
+    },
+    {
+      "name": "implement",
+      "agent": "implementer-tester",
+      "status": "completed",
+      "input": ".tasks/specs/untested-code.md",
+      "output": "src/**"
+    },
+    {
+      "name": "validate",
+      "agent": "validator",
+      "status": "completed",
+      "input": "src/**",
+      "output": ".tasks/reviews/untested-code-validation-v2.md"
+    }
+  ],
+  "history": [
+    {
+      "stage": "",
+      "completed_at": "2026-05-18T04:06:17Z"
+    },
+    {
+      "stage": "pm-spec",
+      "completed_at": "2026-05-18T04:20:29Z"
+    },
+    {
+      "stage": "architect-review",
+      "completed_at": "2026-05-18T14:02:16Z"
+    },
+    {
+      "stage": "implementer-tester",
+      "completed_at": "2026-05-18T14:12:11Z"
+    },
+    {
+      "stage": "validate-v1",
+      "agent": "validator",
+      "outcome": "PASS WITH NOTES — one Low issue flagged; one fix required before v2",
+      "output": ".tasks/reviews/untested-code-validation.md",
+      "completed_at": "2026-05-18T14:30:00Z"
+    },
+    {
+      "stage": "validate-v2",
+      "agent": "validator",
+      "outcome": "PASS — Low fix verified correct; all 102 tests pass; pipeline complete",
+      "output": ".tasks/reviews/untested-code-validation-v2.md",
+      "completed_at": "2026-05-18T14:45:00Z"
+    }
+  ]
+}

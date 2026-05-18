@@ -1,0 +1,10 @@
+{
+  "name": "taskforge-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "lint": "cd nextjs && npm run lint",
+    "test": "cd nextjs && npm test -- tests/",
+    "test:features": "node ./nextjs/node_modules/.bin/jest --config jest.config.js --testPathPattern=tests/features"
+  }
+}
