@@ -2,16 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CommentThread } from "@/components/comment-thread";
+import { TimeTracking } from "@/components/time-tracking";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { getTask, updateTask, deleteTask } from "@/src/lib/api/tasks";
+import type { TaskStatus, Priority } from "@/lib/types";
 
 export default function TaskDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { data: session } = useSession();
   const [task, setTask] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -22,11 +27,8 @@ export default function TaskDetailPage() {
 
   const fetchTask = async () => {
     try {
-      const response = await fetch(`/api/tasks/${params.taskId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setTask(data);
-      }
+      const data = await getTask(params.taskId as string);
+      setTask(data);
     } catch (error) {
       console.error("Failed to fetch task:", error);
     } finally {
@@ -37,15 +39,8 @@ export default function TaskDetailPage() {
   const handleStatusChange = async (newStatus: string) => {
     setIsUpdating(true);
     try {
-      const response = await fetch(`/api/tasks/${params.taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
-      });
-
-      if (response.ok) {
-        fetchTask();
-      }
+      await updateTask(params.taskId as string, { status: newStatus as TaskStatus });
+      fetchTask();
     } catch (error) {
       console.error("Failed to update task:", error);
     } finally {
@@ -56,15 +51,8 @@ export default function TaskDetailPage() {
   const handlePriorityChange = async (newPriority: string) => {
     setIsUpdating(true);
     try {
-      const response = await fetch(`/api/tasks/${params.taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ priority: newPriority }),
-      });
-
-      if (response.ok) {
-        fetchTask();
-      }
+      await updateTask(params.taskId as string, { priority: newPriority as Priority });
+      fetchTask();
     } catch (error) {
       console.error("Failed to update task:", error);
     } finally {
@@ -76,13 +64,8 @@ export default function TaskDetailPage() {
     if (!confirm("Are you sure you want to delete this task?")) return;
 
     try {
-      const response = await fetch(`/api/tasks/${params.taskId}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        router.push(`/projects/${params.id}`);
-      }
+      await deleteTask(params.taskId as string);
+      router.push(`/projects/${params.id}`);
     } catch (error) {
       console.error("Failed to delete task:", error);
     }
@@ -139,6 +122,8 @@ export default function TaskDetailPage() {
               />
             </CardContent>
           </Card>
+
+          <TimeTracking taskId={params.taskId as string} />
         </div>
 
         <div className="space-y-4">
@@ -194,14 +179,14 @@ export default function TaskDetailPage() {
               <div>
                 <label className="text-sm font-medium mb-2 block">Created</label>
                 <p className="text-sm text-muted-foreground">
-                  {new Date(task.createdAt).toLocaleDateString()}
+                  {new Date(task.createdAt).toLocaleString()}
                 </p>
               </div>
 
               <div>
                 <label className="text-sm font-medium mb-2 block">Updated</label>
                 <p className="text-sm text-muted-foreground">
-                  {new Date(task.updatedAt).toLocaleDateString()}
+                  {new Date(task.updatedAt).toLocaleString()}
                 </p>
               </div>
             </CardContent>
