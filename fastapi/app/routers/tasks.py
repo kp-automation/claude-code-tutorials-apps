@@ -84,14 +84,7 @@ def update_task_by_id(
     ):
         notify_task_assigned(repo.db, current_user, task)
 
-    # Bug 5: race condition (TOCTOU) — `prior_status` was captured before repo.update()
-    # committed. Two concurrent PUT requests can both read prior_status=IN_PROGRESS,
-    # both update the task to DONE, and both reach this block, sending duplicate
-    # "task completed" notifications. The re-fetch below appears to confirm the current
-    # state but still uses the stale `prior_status` for the transition check, so the
-    # race window is unchanged. The fix requires a SELECT FOR UPDATE or compare-and-swap.
-    confirmed = repo.get_by_id(task_id, current_user.id)
-    if confirmed and confirmed.status == TaskStatus.DONE and prior_status != TaskStatus.DONE:
+    if task.status == TaskStatus.DONE and prior_status != TaskStatus.DONE:
         notify_task_completed(repo.db, current_user, task)
 
     return task

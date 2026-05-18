@@ -355,3 +355,53 @@ def test_delete_task_other_users_task(client: TestClient, auth_headers: dict,
 def test_delete_task_unauthenticated(client: TestClient):
     resp = client.delete("/api/tasks/1")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# notify_task_completed — race condition regression (Bug 5)
+# ---------------------------------------------------------------------------
+
+def test_update_to_done_fires_completion_notification_exactly_once(
+    client: TestClient, auth_headers: dict, project_id: int
+):
+    """Transitioning a task from IN_PROGRESS to DONE fires exactly one notification."""
+    from unittest.mock import patch
+
+    task_id = _create_task(
+        client, auth_headers, project_id, title="Notify Me", status="IN_PROGRESS"
+    ).json()["id"]
+
+    with patch("app.routers.tasks.notify_task_completed") as mock_notify:
+        resp = client.put(f"/api/tasks/{task_id}", json={"status": "DONE"}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "DONE"
+    assert mock_notify.call_count == 1
+
+
+def test_second_done_update_does_not_fire_duplicate_notification(
+    client: TestClient, auth_headers: dict, project_id: int
+):
+    """Regression: a second PUT setting status=DONE on an already-DONE task must not
+    fire notify_task_completed again (simulates two sequential updates same intent).
+
+    Previously, the misleading re-fetch (confirmed = repo.get_by_id) created a false
+    sense of correctness. The fix: use task.status directly so the second sequential
+    request reads prior_status=DONE and skips the notification correctly.
+    """
+    from unittest.mock import patch
+
+    task_id = _create_task(
+        client, auth_headers, project_id, title="No Dupe", status="IN_PROGRESS"
+    ).json()["id"]
+
+    with patch("app.routers.tasks.notify_task_completed") as mock_notify:
+        # First request: IN_PROGRESS → DONE, should notify once
+        resp1 = client.put(f"/api/tasks/{task_id}", json={"status": "DONE"}, headers=auth_headers)
+        # Second request: DONE → DONE, task already complete — must NOT fire again
+        resp2 = client.put(f"/api/tasks/{task_id}", json={"status": "DONE"}, headers=auth_headers)
+
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    # Both updates 200-OK, notification fired exactly once despite two DONE updates
+    assert mock_notify.call_count == 1
