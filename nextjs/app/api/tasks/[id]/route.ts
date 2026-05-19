@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { z } from "zod";
+import { notifyTaskAssigned, notifyTaskCompleted } from "@/lib/notifications";
 
 const taskUpdateSchema = z.object({
   title: z.string().min(1).optional(),
@@ -10,6 +11,7 @@ const taskUpdateSchema = z.object({
   status: z.enum(["TODO", "IN_PROGRESS", "DONE"]).optional(),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   assigneeId: z.string().nullable().optional(),
+  dueDate: z.string().datetime().optional().nullable(),
 });
 
 export async function GET(
@@ -94,6 +96,9 @@ export async function PATCH(
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
+    const priorAssigneeId = task.assigneeId;
+    const priorStatus = task.status;
+
     const updatedTask = await prisma.task.update({
       where: { id },
       data,
@@ -113,6 +118,22 @@ export async function PATCH(
         },
       },
     });
+
+    const actorId = (session.user as any).id;
+    if (
+      "assigneeId" in data &&
+      updatedTask.assigneeId &&
+      updatedTask.assigneeId !== priorAssigneeId
+    ) {
+      await notifyTaskAssigned({
+        actorId,
+        taskId: updatedTask.id,
+        assigneeId: updatedTask.assigneeId,
+      });
+    }
+    if (updatedTask.status === "DONE" && priorStatus !== "DONE") {
+      await notifyTaskCompleted({ actorId, taskId: updatedTask.id });
+    }
 
     return NextResponse.json(updatedTask);
   } catch (error) {

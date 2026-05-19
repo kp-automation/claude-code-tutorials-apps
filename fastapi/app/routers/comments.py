@@ -9,6 +9,7 @@ from app.models.project import Project
 from app.utils.security import get_current_user
 from app.models.user import User
 from app.utils.exceptions import NotFoundException, ForbiddenException
+from app.services.notification_service import notify_mentions
 
 router = APIRouter(prefix="/api/tasks", tags=["comments"])
 
@@ -58,4 +59,5 @@ def create_task_comment(
     db.add(comment)
     db.commit()
     db.refresh(comment)
+    notify_mentions(db, current_user, comment)
     return comment

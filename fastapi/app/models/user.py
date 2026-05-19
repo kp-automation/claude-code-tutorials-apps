@@ -32,3 +32,12 @@ class User(Base):
         "Task", back_populates="assignee", foreign_keys="Task.assignee_id"
     )
     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="author")
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="Notification.user_id",
+    )
+    time_entries: Mapped[list["TimeEntry"]] = relationship(
+        "TimeEntry", back_populates="user", cascade="all, delete-orphan"
+    )

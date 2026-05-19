@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import auth, projects, tasks, comments
+from app.routers import auth, projects, tasks, comments, notifications, widgets, time_entries, sprints
 
 app = FastAPI(
     title="TaskForge API",
@@ -25,6 +25,11 @@ app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(comments.router)
+app.include_router(notifications.router)
+app.include_router(widgets.router)
+app.include_router(time_entries.router_tasks)
+app.include_router(time_entries.router_entries)
+app.include_router(sprints.router)
 
 
 @app.get("/")

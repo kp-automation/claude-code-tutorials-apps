@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile /Users/kellypunzalan/Documents/github-projects/taskforge/fastapi/app/routers/projects.py)"
+    ]
+  }
+}

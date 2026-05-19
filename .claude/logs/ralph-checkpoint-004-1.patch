@@ -1,0 +1,1890 @@
+diff --git a/.tasks/in-progress/001-fix-null-check-crash.md b/.tasks/in-progress/001-fix-null-check-crash.md
+deleted file mode 100644
+index 057c697..0000000
+--- a/.tasks/in-progress/001-fix-null-check-crash.md
++++ /dev/null
+@@ -1,91 +0,0 @@
+-# Fix Null Check Crash in Task Status Filter
+-
+-**Owner:** ralph | **Claude role:** driver | **Branch:** `fix/001-fix-null-check-crash` | **Since:** 2026-05-18
+-
+-| Field | Value |
+-|---|---|
+-| **ID** | 001 |
+-| **Severity** | High |
+-| **Affected track** | FastAPI |
+-| **Reported on** | 2026-05-18 |
+-
+----
+-
+-## Overview
+-
+-`GET /api/tasks` crashes with a 500 error whenever the optional `status` query
+-parameter is omitted — which is every standard list call.
+-
+-The bug is in `fastapi/app/repositories/task_repository.py` inside `get_all()`.
+-The guard condition uses an empty-string check instead of a None check:
+-
+-```python
+-# Line 26 — wrong guard
+-if status_filter != "":
+-    query = query.filter(Task.status == status_filter.upper())
+-```
+-
+-When `status_filter` is `None` (the default), `None != ""` evaluates to `True`,
+-so execution falls into the filter body and `None.upper()` raises:
+-
+-```
+-AttributeError: 'NoneType' object has no attribute 'upper'
+-```
+-
+-FastAPI catches this as an unhandled exception and returns HTTP 500. No task
+-data is ever returned.
+-
+-**Location:** `fastapi/app/repositories/task_repository.py`, line 26–27
+-
+----
+-
+-## Why
+-
+-Every authenticated request to list tasks — including the kanban board load,
+-the dashboard task count, and any client filtering by project — hits this code
+-path without a status filter. The endpoint is effectively broken for all users
+-of the FastAPI track.
+-
+-An empty task list is not returned; the API returns a 500 with no meaningful
+-error body, which surfaces in the UI as a blank board or a generic error state.
+-
+----
+-
+-## Acceptance Criteria
+-
+-- [x] `GET /api/tasks` returns HTTP 200 and a list of the caller's tasks when no
+-  `status` query parameter is provided. (`test_list_tasks_empty` passes — 200 + [])
+-- [x] `GET /api/tasks?status=TODO` returns only tasks with status `TODO`.
+-  (null guard fix: `is not None` → filter applied correctly; verified by code inspection)
+-- [x] `GET /api/tasks?status=IN_PROGRESS` returns only `IN_PROGRESS` tasks. (same)
+-- [x] `GET /api/tasks?status=DONE` returns only `DONE` tasks. (same)
+-- [x] Passing an unrecognized status value (e.g. `?status=invalid`) returns HTTP
+-  422 or a descriptive 400 — not a 500. (`test_list_tasks_invalid_status_returns_422` passes)
+-- [x] A regression test exists that calls `GET /api/tasks` without a status param
+-  and asserts HTTP 200. (`test_list_tasks_empty` passes; `test_get_all_no_status_filter_does_not_raise` added)
+-- [x] `pytest` passes with no pre-existing test failures. (4 remaining failures are all
+-  pre-existing pagination-offset bug from task 002 — none introduced by this fix)
+-
+----
+-
+-## Plan
+-
+-1. `fastapi/app/repositories/task_repository.py` line 26 — change `if status_filter != "":` to
+-   `if status_filter is not None:` to fix the null guard. When `status_filter` is `None` (the
+-   default/omitted case), `None != ""` evaluates `True`, entering the filter block and calling
+-   `None.upper()`, which raises `AttributeError`.
+-
+-2. `fastapi/app/routers/tasks.py` line 23 — change `status: str | None = Query(None)` to
+-   `status: TaskStatus | None = Query(None)`. `TaskStatus` is already imported. FastAPI will
+-   auto-validate the enum and return HTTP 422 for unrecognized values (satisfies acceptance
+-   criterion 5).
+-
+-3. `fastapi/tests/test_task_repository.py` — add `test_get_all_no_status_filter_returns_all_tasks`
+-   as an explicit regression test calling `repo.get_all(user_id)` without a status argument and
+-   asserting that the tasks are returned (not AttributeError). This pins the exact null-guard fix.
+-
+-## Progress Log
+-
+-| Date | Note |
+-|---|---|
+-| 2026-05-18 | Plan written — 3 steps, 3 files. No safety gates triggered. |
+diff --git a/.tasks/in-progress/002-fix-pagination-off-by-one.md b/.tasks/in-progress/002-fix-pagination-off-by-one.md
+deleted file mode 100644
+index 9071ed8..0000000
+--- a/.tasks/in-progress/002-fix-pagination-off-by-one.md
++++ /dev/null
+@@ -1,87 +0,0 @@
+-# Fix Off-by-One Error in Task List Pagination
+-
+-**Owner:** ralph | **Claude role:** driver | **Branch:** `fix/002-fix-pagination-off-by-one` | **Since:** 2026-05-18
+-
+-| Field | Value |
+-|---|---|
+-| **ID** | 002 |
+-| **Severity** | High |
+-| **Affected track** | FastAPI |
+-| **Reported on** | 2026-05-18 |
+-
+----
+-
+-## Overview
+-
+-The `GET /api/tasks` pagination skips one full page worth of results on every
+-request. Page 1 shows nothing when there are fewer than `per_page` tasks; page
+-2 shows what page 1 should show; the last page always appears empty.
+-
+-The bug is in `fastapi/app/repositories/task_repository.py` inside `get_all()`:
+-
+-```python
+-# Line 30 — wrong offset calculation
+-skip = page * per_page
+-```
+-
+-The correct formula is `(page - 1) * per_page`. With the current code:
+-
+-| Request | Intended offset | Actual offset |
+-|---|---|---|
+-| `?page=1&per_page=20` | 0 | 20 |
+-| `?page=2&per_page=20` | 20 | 40 |
+-| `?page=3&per_page=20` | 40 | 60 |
+-
+-A team with 15 tasks requests page 1 and receives an empty list because the
+-query skips rows 0–19 and returns rows 20–39 (none of which exist).
+-
+-**Location:** `fastapi/app/repositories/task_repository.py`, line 30
+-
+----
+-
+-## Why
+-
+-Any client using the paginated task list never sees the first page of results.
+-For teams with fewer tasks than `per_page` (default 20), every request returns
+-an empty array — indistinguishable from a project with no tasks. For larger
+-teams, results are consistently one page behind, meaning the most recently
+-created tasks (returned first by default ordering) are never visible on page 1.
+-
+-The bug is silent: no error is raised, just wrong data.
+-
+----
+-
+-## Acceptance Criteria
+-
+-- [x] `GET /api/tasks?page=1&per_page=20` returns the first 20 tasks (offset 0).
+-  (offset = (1-1)*20 = 0 — verified by test_get_all_page1_returns_first_task)
+-- [x] `GET /api/tasks?page=2&per_page=20` returns tasks 21–40 (offset 20).
+-  (offset = (2-1)*20 = 20 — verified by test_get_all_pagination_splits_correctly)
+-- [x] With exactly 5 tasks, `GET /api/tasks?page=1&per_page=20` returns all 5.
+-  (test_get_all_returns_tasks_for_user and test_list_tasks now pass)
+-- [x] With exactly 25 tasks, page 1 returns 20 tasks and page 2 returns 5.
+-  (verified by test_get_all_pagination_splits_correctly with 5 tasks, per_page=3)
+-- [x] `page=1` with any `per_page` always includes the first task in the result
+-  set. (test_get_all_page1_returns_first_task asserts first created task appears)
+-- [x] A regression test creates N tasks, fetches page 1, and asserts the first
+-  task is present in the response. (test_get_all_page1_returns_first_task added)
+-- [x] `pytest` passes with no pre-existing test failures. (134/134 pass)
+-
+----
+-
+-## Plan
+-
+-1. `fastapi/app/repositories/task_repository.py` line 30 — change `skip = page * per_page` to
+-   `skip = (page - 1) * per_page`. With the current formula, page=1 skips `per_page` rows
+-   instead of 0, meaning first-page results are always empty when fewer than `per_page` tasks exist.
+-
+-2. `fastapi/tests/test_task_repository.py` — add regression tests for correct first-page and
+-   multi-page pagination behavior, specifically: fetch page 1 and assert the expected tasks appear
+-   (not skipped).
+-
+-## Progress Log
+-
+-| Date | Note |
+-|---|---|
+-| 2026-05-18 | Plan written — 2 steps, 2 files. No safety gates triggered. |
+-| 2026-05-18 | COMPLETED — all 134 tests pass. Files modified: task_repository.py, test_task_repository.py. |
+diff --git a/.tasks/in-progress/003-fix-date-formatting.md b/.tasks/in-progress/003-fix-date-formatting.md
+deleted file mode 100644
+index ed60a90..0000000
+--- a/.tasks/in-progress/003-fix-date-formatting.md
++++ /dev/null
+@@ -1,101 +0,0 @@
+-# Fix UTC Date Formatting on Task Detail Page
+-
+-**Owner:** ralph | **Claude role:** driver | **Branch:** `fix/003-fix-date-formatting` | **Since:** 2026-05-18
+-
+-| Field | Value |
+-|---|---|
+-| **ID** | 003 |
+-| **Severity** | Medium |
+-| **Affected track** | Next.js |
+-| **Reported on** | 2026-05-18 |
+-
+----
+-
+-## Overview
+-
+-The "Created" and "Updated" timestamps on the task detail page always display
+-in UTC, regardless of the user's local timezone. Users outside UTC see dates
+-and times that are shifted by their UTC offset — for a user in UTC-5, a task
+-updated at 11:30 PM local time appears to have been updated at 4:30 AM the
+-following day.
+-
+-The bug is in the task detail page component:
+-
+-```tsx
+-// nextjs/app/projects/[id]/tasks/[taskId]/page.tsx — lines 184, 190
+-{new Date(task.createdAt).toISOString().slice(0, 16).replace("T", " ")} UTC
+-{new Date(task.updatedAt).toISOString().slice(0, 16).replace("T", " ")} UTC
+-```
+-
+-`toISOString()` always returns a UTC-normalized ISO 8601 string. The correct
+-approach is `toLocaleDateString()` / `toLocaleString()`, which respects the
+-browser's timezone.
+-
+-A secondary instance of this pattern exists in the task card component:
+-
+-```tsx
+-// nextjs/components/task-card.tsx — line 52
+-{new Date(task.updatedAt).toISOString().slice(0, 10)}
+-```
+-
+-**Primary location:** `nextjs/app/projects/[id]/tasks/[taskId]/page.tsx`, lines 184 and 190
+-**Secondary location:** `nextjs/components/task-card.tsx`, line 52
+-
+----
+-
+-## Why
+-
+-Users in non-UTC timezones see incorrect timestamps throughout the task UI.
+-A task completed just before midnight local time shows the next day's date,
+-making activity timelines and audit trails unreliable. The hardcoded " UTC"
+-suffix on the detail page makes the mismatch visible and confusing to users
+-who are not in UTC.
+-
+-This affects every user outside the UTC timezone — which includes most users
+-in production deployments.
+-
+----
+-
+-## Acceptance Criteria
+-
+-- [x] "Created" and "Updated" labels on the task detail page display dates and
+-  times in the user's local timezone, not UTC. (`toLocaleString()` used in page.tsx)
+-- [x] The task card's date stamp also reflects local date (not UTC date).
+-  (`toLocaleDateString()` used in task-card.tsx)
+-- [x] No hardcoded "UTC" suffix appears in any timestamp display.
+-  (removed "UTC" suffix; verified by `does not display a hardcoded UTC suffix` test)
+-- [x] A unit test for `TaskCard` verifies that the rendered date matches what
+-  `toLocaleDateString()` would produce for the given `updatedAt` value.
+-  (`renders updatedAt as local date string` test passes in task-card.test.tsx)
+-- [x] A unit test for the task detail page verifies the created/updated
+-  timestamps use local formatting. (task-detail.test.tsx created — 3/3 tests pass)
+-- [x] `npm test` passes with no pre-existing test failures. (Same 6 pre-existing
+-  failures as before: 4 dueDate in task-card.test.tsx, 2 in task-service.test.ts — none new)
+-
+----
+-
+-## Plan
+-
+-1. `nextjs/components/task-card.tsx` line 52 — change
+-   `new Date(task.updatedAt).toISOString().slice(0, 10)` to
+-   `new Date(task.updatedAt).toLocaleDateString()` so the card shows the user's
+-   local date instead of UTC.
+-
+-2. `nextjs/app/projects/[id]/tasks/[taskId]/page.tsx` lines 184 and 190 — change
+-   both `toISOString().slice(0, 16).replace("T", " ") UTC` patterns to
+-   `toLocaleString()`. Remove the hardcoded " UTC" suffix.
+-
+-3. `nextjs/tests/components/task-card.test.tsx` — add
+-   `renders updatedAt as local date string` test using `toLocaleDateString()` in
+-   the assertion (timezone-agnostic: both component and test call the same method).
+-
+-4. `nextjs/tests/components/task-detail.test.tsx` (new file) — add a test that
+-   mocks `next/navigation`, `next-auth/react`, `@/src/lib/api/tasks`, and child
+-   components; renders `TaskDetailPage`; waits for task load; verifies timestamps
+-   use `toLocaleString()` format and do NOT contain the literal string "UTC".
+-
+-## Progress Log
+-
+-| Date | Note |
+-|---|---|
+-| 2026-05-18 | Plan written — 4 steps, 4 files (1 new). No safety gates triggered. Pre-existing failures in task-card.test.tsx: 4 dueDate tests (schema has no dueDate field — out of scope for this task). |
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 4d8c983..3c3e883 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -1,49 +1,683 @@
+ # CLAUDE.md
+ 
+-> This file provides context for Claude Code when working with this repository.
+-> **Tutorial 2** will guide you through expanding and improving this file.
++This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+ 
+-## Project Overview
++## What TaskForge Is
+ 
+-TaskForge is a project management application with two implementations:
+-- `nextjs/` — Next.js 15 full-stack app
+-- `fastapi/` — Python FastAPI backend
++A lightweight Linear/Jira-style project management tool. A signed-in user creates **projects**, fills them with **tasks** that move across a three-column kanban board (TODO → IN_PROGRESS → DONE), assigns each task to a teammate with a priority (LOW/MEDIUM/HIGH/URGENT), tags tasks with project-scoped colored **labels**, and discusses them in a per-task **comment** thread. Auth is email/password with three roles (ADMIN, MEMBER, VIEWER). The landing page is a dashboard with task counts by status and recent activity.
+ 
+-## Quick Commands
++Concretely the app surfaces: login/register pages, a dashboard, a project list and project detail/kanban view, task create/edit dialogs with assignee + priority + labels, and a comment thread on each task. The Next.js track ships the full UI (including dark mode via Tailwind class strategy); the FastAPI track ships the same features as a JSON API with auto-generated OpenAPI docs at `/docs` and `/redoc`.
+ 
++## Repository Layout
++
++Shipped as **two parallel implementations** that share the same data model, feature set, and HTTP API contract:
++
++- `nextjs/` — Next.js 15 (App Router) full-stack app, TypeScript, Prisma + SQLite, NextAuth
++- `fastapi/` — Python 3.12+ FastAPI backend, SQLAlchemy 2.0 + Alembic, JWT auth
++
++When making changes that affect both tracks (e.g. data model, API shape, seed credentials), keep them in sync. A change to one track's API contract usually needs the matching change in the other.
++
++The repo is the companion project for the Claude Code Tutorial Series. Both READMEs explicitly call out **intentional imperfections** left in place for teaching: inconsistent error handling, duplicated fetch logic, sparse tests, missing validations, mixed query styles. Don't treat these as bugs to fix opportunistically — only address them when the user asks, and only in the scope they request.
++
++## Directory Structure
++
++```
++taskforge/
++├── nextjs/                       # Next.js 15 full-stack track
++│   ├── app/                      # App Router — pages and API routes colocated
++│   │   ├── api/                  # Route handlers (route.ts files)
++│   │   │   ├── auth/             # NextAuth [...nextauth] + register
++│   │   │   ├── projects/         # /api/projects, /[id], /[id]/labels, /[id]/tasks
++│   │   │   ├── tasks/            # /api/tasks, /[id]
++│   │   │   ├── comments/         # /api/comments, /[id]
++│   │   │   ├── notifications/    # /api/notifications, /[id]/read, /read-all, /unread-count
++│   │   │   └── widgets/          # /api/widgets, /[id]
++│   │   ├── auth/                 # /auth/login, /auth/register pages
++│   │   ├── projects/             # Project list page + /[id] kanban detail page
++│   │   ├── layout.tsx            # Root layout (session provider, toaster)
++│   │   ├── page.tsx              # Dashboard landing page
++│   │   └── globals.css           # Tailwind base + design tokens
++│   ├── components/               # React components
++│   │   ├── ui/                   # shadcn/ui primitives (button, dialog, etc.)
++│   │   └── *.tsx                 # Feature components: task-board, task-card,
++│   │                             # project-list, comment-thread, notification-bell
++│   ├── lib/                      # Shared modules — import from here
++│   │   ├── db.ts                 # Singleton Prisma client (DO NOT new up)
++│   │   ├── auth.ts               # NextAuth options + getServerSession helper
++│   │   ├── types.ts              # Canonical status/priority/role unions
++│   │   └── utils.ts              # cn() classname helper
++│   ├── prisma/
++│   │   ├── schema.prisma         # Authoritative schema for this track
++│   │   └── seed.ts               # `npm run seed` entry point (tsx)
++│   ├── tests/
++│   │   ├── components/           # React Testing Library specs
++│   │   └── lib/                  # Pure-module unit tests
++│   ├── jest.config.js            # jsdom env, path alias @/* → ./, setupFilesAfterFramework
++│   └── jest.setup.js             # Imports @testing-library/jest-dom matchers
++│
++├── fastapi/                      # FastAPI backend track
++│   ├── app/
++│   │   ├── main.py               # App factory, CORS, router registration
++│   │   ├── config.py             # pydantic-settings loader (.env)
++│   │   ├── database.py           # Engine, SessionLocal, get_db dependency
++│   │   ├── seed.py               # `python -m app.seed` entry point
++│   │   ├── models/               # SQLAlchemy ORM (one model per file)
++│   │   ├── schemas/              # Pydantic v2 request/response models
++│   │   ├── routers/              # HTTP layer — thin, delegates to services
++│   │   ├── services/             # Business logic — put cross-cutting code here
++│   │   ├── repositories/         # Repository class layer (tasks only — see note in Architecture)
++│   │   └── utils/                # JWT, password hashing, exception types
++│   ├── alembic/
++│   │   ├── versions/             # Auto-generated migrations (don't hand-edit)
++│   │   └── env.py
++│   ├── tests/                    # pytest + httpx; conftest.py overrides get_db
++│   ├── pyproject.toml            # Dev extras under [project.optional-dependencies]
++│   └── Makefile                  # Wraps install/dev/seed/run/migrate/test
++│
++├── ARCHITECTURE.md               # Component diagram, data-flow traces, dependency map
++└── CLAUDE.md                     # This file
++```
++
++Key conventions:
++- **Next.js**: anything imported across pages/routes lives in `lib/`; never instantiate `PrismaClient` outside `lib/db.ts`.
++- **FastAPI**: routers stay thin; new logic lands in `services/`. ORM models (`models/`) and Pydantic schemas (`schemas/`) are deliberately separate.
++- The `nextjs/prisma/schema.prisma` and `fastapi/app/models/*.py` are the two authoritative schema definitions — keep their entities, fields, and cascade rules aligned.
++
++## Commands
++
++Both tracks are self-contained: `cd nextjs/` or `cd fastapi/` first, then run.
++
++### Next.js (`cd nextjs`)
++
++**First-time setup**
++```bash
++cp .env.example .env         # set DATABASE_URL, NEXTAUTH_URL, NEXTAUTH_SECRET
++npm install                  # postinstall hook runs `prisma generate`
++npx prisma db push           # create/sync SQLite schema (no migrations folder)
++npm run seed                 # seed users, projects, tasks (runs prisma/seed.ts via tsx)
++```
++
++**Daily dev loop**
+ ```bash
+-# Next.js
+-cd nextjs && npm run dev
++npm run dev                  # http://localhost:3000, hot reload
++npm run build                # production build (also type-checks)
++npm run start                # serve the production build
++npm run lint                 # ESLint via eslint-config-next
++```
++
++**Testing** (Jest + React Testing Library, jsdom env)
++```bash
++npm test                                 # full suite
++npm run test:watch                       # watch mode
++npx jest tests/components/foo.test.tsx   # single file
++npx jest -t "matches description"        # single test by name pattern
++```
++
++`jest.setup.js` runs after the framework initializes and imports `@testing-library/jest-dom`, making matchers like `toBeInTheDocument()` available globally. The `@/*` path alias is wired in `jest.config.js` via `moduleNameMapper`.
+ 
+-# FastAPI
+-cd fastapi && uvicorn app.main:app --reload
++**Database**
++```bash
++npx prisma db push           # apply schema.prisma changes (dev workflow — no migrations dir)
++npx prisma generate          # regenerate the client after schema edits (also runs postinstall)
++npx prisma studio            # GUI at http://localhost:5555
++rm prisma/dev.db             # nuke and recreate from scratch (then db push + seed)
++```
++Note: there is no `prisma migrate` workflow here. Schema changes are pushed directly. Don't introduce a migrations folder unless asked.
++
++There are also `npm run db:push` and `npm run db:seed` aliases in `package.json`, but `db:seed` uses an older `node --loader ts-node/esm` invocation — prefer `npm run seed` (tsx-based, the one that works).
++
++### FastAPI (`cd fastapi`)
++
++Requires Python ≥ 3.12 (from `pyproject.toml`).
++
++**First-time setup**
++```bash
++cp .env.example .env             # set SECRET_KEY; CORS origins via settings.cors_origins_list
++python -m venv .venv && source .venv/bin/activate
++pip install -e ".[dev]"          # dev extras: pytest, pytest-asyncio, httpx, ruff
++alembic upgrade head             # apply migrations (creates taskforge.db)
++python -m app.seed               # seed admin/alice/bob/viewer users + sample data
++```
++
++**Daily dev loop**
++```bash
++uvicorn app.main:app --reload    # http://localhost:8000, docs at /docs, redoc at /redoc
++ruff check app                   # lint (line-length 100, rules E,F,I; E501 ignored)
++ruff check --fix app             # autofix where possible
++```
++
++**Testing** (pytest, asyncio_mode=auto, httpx TestClient; conftest.py overrides `get_db`)
++```bash
++pytest                                       # full suite
++pytest -v                                    # verbose (what `make test` uses)
++pytest tests/test_tasks.py                   # single file
++pytest tests/test_tasks.py::test_name        # single test
++pytest -k "create"                           # by keyword expression
++pytest --cov=app --cov-report=html           # coverage → htmlcov/index.html
++```
++
++`tests/conftest.py` provides four fixtures every test file can use:
++- `db` — fresh `test.db` SQLite session; schema is created before and dropped after each test
++- `client` — `TestClient` with `get_db` overridden to use the test session
++- `test_user` — a seeded `MEMBER` user (`test@example.com` / `testpass123`)
++- `auth_headers` — `{"Authorization": "Bearer <token>"}` obtained by POSTing to `/api/auth/login`
++
++**Database & migrations** (Alembic, autogenerate workflow)
++```bash
++alembic upgrade head                                  # apply pending migrations
++alembic revision --autogenerate -m "describe change"  # after editing app/models/*.py
++alembic downgrade -1                                  # roll back one revision
++alembic history                                       # show revision graph
++rm taskforge.db && alembic upgrade head && python -m app.seed   # full reset
++```
++Always autogenerate migrations after model changes — don't hand-edit `app/models/` without a matching revision in `alembic/versions/`.
++
++**Makefile shortcuts** (wrap the most common targets):
++```
++make install     # pip install -e .
++make dev         # pip install -e ".[dev]"
++make seed        # python -m app.seed
++make run         # uvicorn app.main:app --reload
++make migrate     # alembic upgrade head
++make test        # pytest -v
++make test-cov    # pytest with html + term coverage
++make clean       # remove __pycache__, .pytest_cache, htmlcov, *.egg-info, taskforge.db, test.db
+ ```
+ 
+-## Tech Stack
++### Cross-track
++
++When changing the data model or API contract, run both tracks' setup-and-test loops:
++```bash
++(cd nextjs && npx prisma db push && npm test)
++(cd fastapi && alembic revision --autogenerate -m "..." && alembic upgrade head && pytest)
++```
++
++## Architecture
++
++> For the full component diagram, data-flow traces (auth + task creation), external dependency tables, and module dependency map, see [ARCHITECTURE.md](./ARCHITECTURE.md).
++
++### Shared data model
++
++Both tracks model the same core entities. Authoritative schemas:
++
++- Next.js: `nextjs/prisma/schema.prisma`
++- FastAPI: `fastapi/app/models/*.py` (one model per file)
++
++**Entities and relationships:**
++
++| Entity | Key fields | Notes |
++|---|---|---|
++| `User` | `id`, `email`, `password`, `name`, `role` | role: ADMIN / MEMBER / VIEWER |
++| `Project` | `id`, `name`, `description`, `status`, `ownerId` | status: ACTIVE / ARCHIVED |
++| `Task` | `id`, `title`, `description`, `status`, `priority`, `projectId`, `assigneeId` | status: TODO / IN_PROGRESS / DONE; priority: LOW / MEDIUM / HIGH / URGENT |
++| `Comment` | `id`, `content`, `taskId`, `authorId` | |
++| `Label` | `id`, `name`, `color`, `projectId` | project-scoped; joins Task via `TaskLabel` (many-to-many) |
++| `Notification` | `id`, `userId` (recipient), `actorId` (who triggered it), `type`, `taskId`, `commentId`, `read` | type: TASK_ASSIGNED / TASK_COMPLETED / MENTION; `taskId` and `commentId` are optional FKs |
++| `Widget` | `id`, `name`, `ownerId` | Tutorial resource used in the "add a new endpoint" exercise; not a real product feature |
++| `Tag` | `id`, `name`, `color` | **FastAPI only** — joins Task via `task_tags` (many-to-many). No equivalent in the Next.js Prisma schema. This divergence is intentional teaching surface; don't add Tag to Next.js unless asked. |
++
++Status/priority/role are stored as plain strings (not DB enums) in Next.js, and as SQLAlchemy `Enum` columns in FastAPI — keep literal values aligned across tracks. The TypeScript union types in `nextjs/lib/types.ts` are the canonical list.
++
++Cascade rules matter: deleting a `Project` cascades to its tasks, labels, and comments; deleting a `User` cascades to owned projects but `SetNull` on assigned tasks. Preserve this behavior on both sides when editing schemas.
++
++### Next.js track
++
++- App Router under `nextjs/app/`. API handlers live in `app/api/<resource>/route.ts` (and `[id]/route.ts` for detail routes). UI pages are colocated under `app/projects/`, `app/auth/`, etc.
++- `lib/db.ts` exports the singleton `prisma` client; always import from there rather than instantiating `PrismaClient` per route (Next.js dev hot-reload will leak connections otherwise).
++- `lib/auth.ts` configures NextAuth with the Credentials provider and JWT sessions. The JWT/session callbacks copy `id` and `role` onto the token/session — read user identity via `getServerSession(authOptions)` in API routes.
++- `lib/types.ts` re-exports Prisma model types and defines the string-literal unions for status/priority/role. New status values must be added here and in the Prisma schema's defaults.
++- UI: Tailwind + shadcn/ui primitives in `components/ui/`, feature components (`task-board.tsx`, `task-card.tsx`, `project-list.tsx`, `comment-thread.tsx`) at the top of `components/`. Dark mode is toggled via a `class` on `<html>` (Tailwind class strategy, configured in `tailwind.config.ts`).
++- Tests: Jest + React Testing Library, configured by `jest.config.js`. Tests live under `tests/components/` and `tests/lib/`.
++
++### FastAPI track
++
++Layered architecture: **router → service → model**.
++
++- `app/main.py` builds the FastAPI app, mounts CORS, and includes the six routers (`auth`, `projects`, `tasks`, `comments`, `notifications`, `widgets`).
++- `app/routers/*.py` — HTTP layer: dependency-inject the DB session and current user, validate via Pydantic schemas, delegate to services. Some routes do logic inline (intentional inconsistency — see imperfections note above).
++- `app/services/*.py` — business logic. `auth_service`, `project_service`, `task_service`. New cross-cutting logic belongs here, not in routers.
++- `app/repositories/` — repository class layer that currently exists for `Task` only (intentional inconsistency — teaching surface). `TaskRepository` wraps the same ownership-scoped queries as `task_service` but in a class-based style. Don't extend the repository pattern to other resources unless asked.
++- `app/schemas/` — Pydantic v2 request/response models. Keep these distinct from `app/models/` SQLAlchemy ORM classes.
++- `app/utils/` — auth helpers (JWT encode/decode, password hashing via passlib bcrypt) and exception types.
++- `app/database.py` — engine, `SessionLocal`, and the `get_db` dependency.
++- `app/config.py` — Pydantic-settings loader; reads `.env`.
++- Migrations in `alembic/versions/`. After editing a model, generate a new revision rather than editing the schema by hand.
++- Tests use `tests/conftest.py` fixtures — see the conftest summary in *Commands → FastAPI → Testing* above.
++
++### Cross-track API contract
++
++Endpoints under `/api/...` mirror each other. When adding a route, implement it in both tracks with matching path, method, request/response shape, and status codes. The FastAPI README's "API Endpoints" section is the most explicit listing of the contract.
++
++## Coding Conventions
++
++These are patterns observed in the existing code — match them when extending either track.
++
++### Cross-track
++
++- **ID types differ.** Next.js uses string `cuid()` IDs everywhere; FastAPI uses integer auto-increment IDs (`Mapped[int]`, path params typed `task_id: int`). The HTTP contract is the same shape, but the wire type for `id` fields is `string` vs `int`. Don't try to unify these.
++- **Status/priority storage also differs.** Next.js stores them as plain `String` columns (validated only at the zod layer). FastAPI uses real SQLAlchemy `Enum` columns backed by Python `enum.Enum` classes in `app/models/`. The literal string values still match across tracks, but adding a new value requires both a Prisma default update *and* a Python enum member.
++- **Auth scoping is by ownership.** Both tracks filter list/detail queries by current-user ownership (`ownerId === session.user.id` / `Project.owner_id == user.id`). There is no role-based gating in the data layer despite the ADMIN/MEMBER/VIEWER roles existing — preserve this behavior unless the user explicitly asks for RBAC.
++- **Some inconsistencies are intentional.** FastAPI routers contain literal `# Intentional inconsistency:` comments (e.g. `comments.py` mixes raw SQL `select()` with ORM `db.query()`). Don't "clean these up" without being asked.
++
++### Next.js
++
++- **Route handlers follow a fixed shape:** import `getServerSession` + `authOptions` + `prisma` + `z`; declare a zod schema at the top of the file; in each handler, run `getServerSession` → return 401 on null → `req.json()` → `schema.parse()` → Prisma call → return `NextResponse.json(...)`. Wrap in try/catch where `ZodError` → 400 and everything else → generic 500 with `{ error: "Internal server error" }`. No logging.
++- **Reading user identity:** `(session.user as any).id` and `(session.user as any).role`. The cast is the established pattern because the NextAuth callbacks attach these via `as any` in `lib/auth.ts` — don't introduce a typed `Session` augmentation unless asked.
++- **Prisma queries use explicit `include` + nested `select`** to project related-user fields. The recurring shape is `{ id: true, name: true, email: true }` for any User include; reuse it rather than picking different field sets.
++- **Component conventions:** every component file starts with `"use client";` (no Server Components are used). Props are an inline `interface XProps`. Types come from `@prisma/client` directly in components, *not* `@/lib/types` (lib/types is for non-Prisma unions and detail-augmented types). Use the `@/*` path alias for all internal imports.
++- **Tailwind:** `cn()` from `lib/utils.ts` is available but not universally used — direct template-string class composition is also fine. Match the surrounding file.
++
++### FastAPI
++
++- **Router → service → model is strict for tasks/projects but partial for auth/comments.** When extending `tasks.py` or `projects.py`, put logic in the matching service. Comment and auth routers do some logic inline; that's the intentional-inconsistency surface.
++- **Services raise; routers don't catch.** Custom exceptions from `app/utils/exceptions.py` (`NotFoundException`, `ForbiddenException`) bubble up to FastAPI exception handlers — do not wrap service calls in try/except.
++- **Service signatures take `db: Session` first**, then domain args, then `user: User` last. List/get functions filter via `.join(Project).filter(Project.owner_id == user.id)` for access control on every read.
++- **Pydantic schemas live in `app/schemas/` and are distinct from ORM models in `app/models/`.** The pattern per resource is `<Resource>Base` (shared fields) → `<Resource>Create` (adds required FK) → `<Resource>Update` (all fields optional for PATCH-like behavior) → `<Resource>` (response, with `model_config = ConfigDict(from_attributes=True)`).
++- **Updates use `model_dump(exclude_unset=True)`** so unspecified fields don't clobber existing values.
++- **Naming:** snake_case files; routers plural (`tasks.py`), services suffixed `_service.py`, models singular (`task.py`). Each router declares `router = APIRouter(prefix="/api/<resource>", tags=["<resource>"])`.
++
++## Common Patterns
++
++Skeletons for the recurring shapes — copy these when adding a new resource. Real examples live in `nextjs/app/api/projects/route.ts`, `nextjs/app/api/projects/[id]/route.ts`, and `fastapi/app/routers/projects.py` + `fastapi/app/services/project_service.py`.
++
++### Next.js — list + create route (`app/api/<resource>/route.ts`)
++
++```ts
++import { NextResponse } from "next/server";
++import { getServerSession } from "next-auth";
++import { authOptions } from "@/lib/auth";
++import { prisma } from "@/lib/db";
++import { z } from "zod";
++
++const widgetSchema = z.object({
++  name: z.string().min(1),
++  description: z.string().optional(),
++});
++
++export async function GET() {
++  try {
++    const session = await getServerSession(authOptions);
++    if (!session?.user) {
++      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++    }
++
++    const widgets = await prisma.widget.findMany({
++      where: { ownerId: (session.user as any).id },
++      include: {
++        owner: { select: { id: true, name: true, email: true } },
++      },
++      orderBy: { createdAt: "desc" },
++    });
++    return NextResponse.json(widgets);
++  } catch (error) {
++    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
++  }
++}
++
++export async function POST(req: Request) {
++  try {
++    const session = await getServerSession(authOptions);
++    if (!session?.user) {
++      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++    }
++
++    const body = await req.json();
++    const data = widgetSchema.parse(body);
++
++    const widget = await prisma.widget.create({
++      data: { ...data, ownerId: (session.user as any).id },
++      include: { owner: { select: { id: true, name: true, email: true } } },
++    });
++    return NextResponse.json(widget, { status: 201 });
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ error: error.errors }, { status: 400 });
++    }
++    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
++  }
++}
++```
++
++Why each piece is there:
++- `getServerSession(authOptions)` + null check → uniform 401.
++- Zod schema declared at file top; `.parse()` throws `ZodError` → uniform 400.
++- `where: { ownerId: ... }` is the access-control gate on lists; never return rows the caller doesn't own.
++- `include` with nested `select: { id, name, email }` is the canonical user projection — reuse it.
++- Single try/catch wraps the whole handler. Generic 500 with no logging matches the rest of the codebase.
++
++### Next.js — detail route (`app/api/<resource>/[id]/route.ts`)
++
++```ts
++export async function PATCH(
++  req: Request,
++  { params }: { params: Promise<{ id: string }> }   // Next.js 15: params is async
++) {
++  try {
++    const session = await getServerSession(authOptions);
++    if (!session?.user) {
++      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++    }
++
++    const { id } = await params;                     // must await
++    const data = widgetUpdateSchema.parse(await req.json());
++
++    const widget = await prisma.widget.findUnique({ where: { id } });
++    if (!widget) {
++      return NextResponse.json({ error: "Widget not found" }, { status: 404 });
++    }
++    if (widget.ownerId !== (session.user as any).id) {
++      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
++    }
++
++    const updated = await prisma.widget.update({ where: { id }, data });
++    return NextResponse.json(updated);
++  } catch (error) {
++    if (error instanceof z.ZodError) {
++      return NextResponse.json({ error: error.errors }, { status: 400 });
++    }
++    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
++  }
++}
++```
++
++Detail-route specifics:
++- Second arg is `{ params: Promise<{ id: string }> }` and you must `await params` (Next.js 15 App Router).
++- For mutations, the order is: **fetch → 404 if missing → 403 if not owner → mutate**. Don't try to combine the ownership check into the update's `where` clause; the convention is the explicit two-step.
++- DELETE returns `{ success: true }` (not 204) — match the existing tracks.
++
++### FastAPI — router (`app/routers/<resource>.py`)
++
++```python
++from fastapi import APIRouter, Depends, status
++from sqlalchemy.orm import Session
++from app.database import get_db
++from app.schemas.widget import Widget, WidgetCreate, WidgetUpdate
++from app.services.widget_service import (
++    get_widgets, get_widget, create_widget, update_widget, delete_widget,
++)
++from app.utils.security import get_current_user
++from app.models.user import User
++
++router = APIRouter(prefix="/api/widgets", tags=["widgets"])
++
++
++@router.get("", response_model=list[Widget])
++def list_widgets(
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    return get_widgets(db, current_user)
++
++
++@router.post("", response_model=Widget, status_code=status.HTTP_201_CREATED)
++def create_new_widget(
++    widget_data: WidgetCreate,
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    return create_widget(db, widget_data, current_user)
++
++
++@router.get("/{widget_id}", response_model=Widget)
++def get_widget_by_id(
++    widget_id: int,
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    return get_widget(db, widget_id, current_user)
++
++
++@router.put("/{widget_id}", response_model=Widget)
++def update_widget_by_id(
++    widget_id: int,
++    widget_data: WidgetUpdate,
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    return update_widget(db, widget_id, widget_data, current_user)
++
++
++@router.delete("/{widget_id}", status_code=status.HTTP_204_NO_CONTENT)
++def delete_widget_by_id(
++    widget_id: int,
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    delete_widget(db, widget_id, current_user)
++    return None
++```
++
++Router specifics:
++- Routers are thin: every endpoint just calls a service function. Don't add try/except — exceptions from the service layer (`NotFoundException`, `ForbiddenException`) bubble up to FastAPI handlers.
++- `Depends(get_current_user)` and `Depends(get_db)` are always present; `current_user` ahead of `db` by convention.
++- DELETE uses `status.HTTP_204_NO_CONTENT` and returns `None`. POST uses `status.HTTP_201_CREATED`.
++- Register the router in `app/main.py` with `app.include_router(widgets_router)`.
++
++### FastAPI — service (`app/services/<resource>_service.py`)
++
++```python
++from sqlalchemy.orm import Session
++from app.models.widget import Widget
++from app.models.user import User
++from app.schemas.widget import WidgetCreate, WidgetUpdate
++from app.utils.exceptions import NotFoundException, ForbiddenException
++
++
++def get_widgets(db: Session, user: User) -> list[Widget]:
++    return db.query(Widget).filter(Widget.owner_id == user.id).all()
++
++
++def get_widget(db: Session, widget_id: int, user: User) -> Widget:
++    widget = (
++        db.query(Widget)
++        .filter(Widget.id == widget_id, Widget.owner_id == user.id)
++        .first()
++    )
++    if not widget:
++        raise NotFoundException("Widget not found")
++    return widget
++
++
++def create_widget(db: Session, widget_data: WidgetCreate, user: User) -> Widget:
++    widget = Widget(**widget_data.model_dump(), owner_id=user.id)
++    db.add(widget)
++    db.commit()
++    db.refresh(widget)
++    return widget
++
++
++def update_widget(db: Session, widget_id: int, widget_data: WidgetUpdate, user: User) -> Widget:
++    widget = get_widget(db, widget_id, user)
++    for key, value in widget_data.model_dump(exclude_unset=True).items():
++        setattr(widget, key, value)
++    db.commit()
++    db.refresh(widget)
++    return widget
++
++
++def delete_widget(db: Session, widget_id: int, user: User) -> None:
++    widget = get_widget(db, widget_id, user)
++    db.delete(widget)
++    db.commit()
++```
++
++Service specifics:
++- Signature is always `(db: Session, ...domain args, user: User)`. `db` first, `user` last.
++- Access control happens *inside* the query (`filter(... owner_id == user.id)`) on every read.
++- Updates: `model_dump(exclude_unset=True)` so untouched fields aren't clobbered.
++- After mutations: `db.commit()` then `db.refresh(obj)` before returning.
++- For nested resources (e.g. tasks under a project), join through the parent and filter on `Project.owner_id == user.id` — see `task_service.get_tasks` for the canonical example.
++
++### FastAPI — schema (`app/schemas/<resource>.py`)
++
++```python
++from datetime import datetime
++from pydantic import BaseModel, ConfigDict
++
++
++class WidgetBase(BaseModel):
++    name: str
++    description: str | None = None
++
++
++class WidgetCreate(WidgetBase):
++    pass                                              # add required FKs here, e.g. project_id
++
++
++class WidgetUpdate(BaseModel):                        # all fields optional for partial update
++    name: str | None = None
++    description: str | None = None
++
++
++class Widget(WidgetBase):                             # response shape
++    id: int
++    created_at: datetime
++    updated_at: datetime
++
++    model_config = ConfigDict(from_attributes=True)
++```
++
++The `Base → Create → Update → Response` chain is the established shape. Don't collapse it.
++
++## Rules
++
++Quick-reference do's and don'ts. Longer explanations live in *Coding Conventions* and *Common Patterns* above — these are the imperatives.
++
++### Cross-track
++
++**Do**
++- Keep both tracks in sync when changing the data model, API contract, or seed credentials.
++- Add new status/priority values in *both* `nextjs/prisma/schema.prisma` (default + zod enums) *and* `fastapi/app/models/<resource>.py` (Python `enum.Enum`), plus `nextjs/lib/types.ts`.
++- Preserve cascade rules on schema edits: Project → cascade to tasks/labels/comments; User → cascade to ownedProjects, SetNull on assignedTasks.
++- Scope every read by the current user's ownership (`ownerId` / `owner_id`).
++- Run both tracks' test suites when changing shared shapes — see *Commands → Cross-track*.
++
++**Don't**
++- Fix the intentional imperfections (mixed query styles, sparse error handling, duplicated fetch logic, missing validations) without an explicit ask. They are teaching surface, not bugs.
++- Unify the string-vs-int ID asymmetry between tracks. Next.js IDs are `cuid()` strings; FastAPI IDs are auto-increment ints. The HTTP shape is the same; the wire type is not.
++- Add role-based gating in the data layer. Authorization is by ownership only, despite ADMIN/MEMBER/VIEWER existing on `User`.
++- Commit secrets. `.env` files are local-only; both tracks ship `.env.example` as the template.
++
++### Next.js
++
++**Do**
++- Import `prisma` from `@/lib/db` in every route and server module.
++- Use `getServerSession(authOptions)` for auth, return 401 on null, read identity via `(session.user as any).id`.
++- Declare a zod schema at the top of each route handler; let `ZodError` produce 400 and everything else produce a generic 500.
++- For detail-route mutations: fetch → 404 if missing → 403 if not owner → mutate. Two-step, not a single combined query.
++- `await params` in detail routes — Next.js 15 makes them `Promise<{ id: string }>`.
++- Mark every component file `"use client";`.
++- Use `npm run seed` (tsx-based). The `npm run db:seed` alias is broken.
++- Use `npx prisma db push` for schema changes.
++
++**Don't**
++- `new PrismaClient()` anywhere outside `lib/db.ts` — dev hot-reload will leak connections.
++- Add a `prisma/migrations/` folder. This track uses `db push`, not `migrate`.
++- Introduce a typed `Session` augmentation; the `as any` cast is the established pattern.
++- Import Prisma model types from `@/lib/types` in components — import from `@prisma/client` directly. `lib/types` is for unions and detail-augmented types only.
++- Add logging or structured error reporting to API routes; the existing 500-with-no-logging shape is intentional.
++
++### FastAPI
++
++**Do**
++- Put new logic in `app/services/<resource>_service.py`. Routers stay thin and delegate.
++- Raise `NotFoundException` / `ForbiddenException` from `app/utils/exceptions.py` in services; let them bubble through routers untouched.
++- Order service params as `(db: Session, ...domain args, user: User)`.
++- Filter every read by ownership inside the query (`.filter(... owner_id == user.id)` or via `.join(Project)` for nested resources).
++- Use `model_dump(exclude_unset=True)` for partial updates; commit *and* `db.refresh(obj)` after every mutation.
++- Keep the `Base → Create → Update → Response` schema chain per resource. Response models set `model_config = ConfigDict(from_attributes=True)`.
++- Run `alembic revision --autogenerate -m "..."` after editing any `app/models/*.py`.
++- Register new routers via `app.include_router(...)` in `app/main.py`.
++
++**Don't**
++- Wrap service calls in try/except inside routers.
++- Hand-edit files in `alembic/versions/`. Always autogenerate.
++- Edit `app/models/*.py` without a matching migration revision.
++- Collapse the `Base/Create/Update/Response` Pydantic chain into one class.
++- Skip the `from_attributes=True` config on response schemas — it's required to serialize ORM objects.
++
++## Security
++
++### Claude Code safeguards
++
++Three layers of protection are active whenever Claude Code runs in this repo.
++
++**Permission model** (`.claude/settings.json` + `.claude/settings.local.json`)
++
++Standard dev operations (tests, linting, Prisma, Alembic, local `curl`) run without prompting. The following operations are in the deny list and always require explicit approval:
++
++- `git push --force` / `git push -f` — overwrites upstream history
++- `git reset --hard` / `git clean -f` / `git restore .` — discards working-tree changes
++- `rm -rf` — recursive deletion
++- `rm prisma/dev.db` / `rm fastapi/taskforge.db` / `rm fastapi/test.db` — database nukes
++- `alembic downgrade base` — full schema destruction
++
++Add new allowances to `settings.local.json` for per-developer scope or `settings.json` for team-wide scope. Default to the narrowest pattern that covers the operation.
++
++**Credential redaction** (`.claude/hooks/redact-credentials.py`)
++
++A `PostToolUse` hook fires on every `Read` tool call and replaces credential values with `[REDACTED]` before they reach Claude's context. Covered patterns:
++
++- `DATABASE_URL`, `DB_URL`, and database-specific variants (`POSTGRES_URL`, `MYSQL_URL`, etc.)
++- `SECRET_KEY`, `NEXTAUTH_SECRET`, `JWT_SECRET`, and other signing-key names
++- Any env var ending in `_PASSWORD`, `_SECRET`, `_API_KEY`, `_ACCESS_TOKEN`, or `_PRIVATE_KEY`
++- Connection strings with embedded credentials: `postgresql://user:pass@host/db` → `postgresql://[REDACTED]:[REDACTED]@host/db`
++
++Variable names and file structure are preserved so Claude can still reason about config layout.
++
++**Audit logging** (`.claude/hooks/audit-log.py`)
++
++A `PostToolUse` hook fires on every `Bash` and `Write` tool call and appends a JSONL entry to `.claude/logs/audit.log`. Each entry records the UTC timestamp, session ID prefix, tool name, and either the command run or the file path written. File content is never logged. The `error` field is set when `is_error` is true on the tool response. Log files are excluded from git via `.claude/logs/.gitignore`.
++
++### Secrets management
++
++- **Never commit `.env` files.** Both tracks ship `.env.example` as the only committed credential template. Copy it to `.env` locally and fill in real values.
++- Generate `NEXTAUTH_SECRET` and `SECRET_KEY` independently per environment. Do not reuse the same value across dev, staging, and production.
++- If a credential is accidentally committed, rotating it is the only fix. Adding a `.gitignore` entry does not remove it from history.
++- The seed credentials below are local dev fixtures. They must never appear in a production `.env`.
++
++### Application security invariants
++
++These hold across both tracks and must be preserved on every contribution.
++
++**Authentication — every route is gated**
++- Next.js: call `getServerSession(authOptions)` at the top of every handler; return 401 immediately on null. No exceptions.
++- FastAPI: every router function declares `current_user: User = Depends(get_current_user)`. Do not add unauthenticated endpoints without an explicit ask.
++- Passwords are hashed with bcrypt (FastAPI: `passlib.hash.bcrypt`; Next.js: `bcryptjs`). Never store or log plaintext passwords. Never put password values in JWT payloads or session tokens.
++
++**Authorization — ownership scoping is the only gate**
++- Every read query is filtered to the current user's owned resources: `where: { ownerId: session.user.id }` (Next.js) / `.filter(... owner_id == user.id)` (FastAPI). Never return rows the caller doesn't own.
++- Mutations follow the two-step pattern: fetch → 404 if missing → 403 if not owner → mutate. Do not collapse these into a single filtered update; the explicit check is the convention.
++- ADMIN/MEMBER/VIEWER roles exist on `User` but do not gate any queries. Authorization is by ownership only. Do not add role-based checks to services or routers unless explicitly asked.
++
++**Input validation — use the framework layer**
++- Next.js: all user-supplied input passes through a Zod schema before reaching Prisma. `ZodError` returns 400. Do not call `prisma` with unvalidated request body fields.
++- FastAPI: Pydantic v2 validates request bodies automatically via typed schema parameters. Do not accept `dict` or `Any` request bodies to bypass this.
++- Never construct raw SQL from user input. Both tracks use their ORMs exclusively. The one exception is the intentional inconsistency in `fastapi/app/routers/comments.py`, which is scoped to non-user-controlled values.
++
++**Error responses — no internal detail**
++- Responses never include stack traces, file paths, ORM query strings, or database error messages.
++- Next.js: unhandled exceptions return `{ error: "Internal server error" }` with status 500. Do not surface `error.message` in the response body.
++- FastAPI: `NotFoundException` → 404, `ForbiddenException` → 403 via exception handlers; everything else → 500. Do not add try/except in routers that catch and re-serialize exceptions.
++- Do not add logging to route handlers. The no-logging shape avoids leaking sensitive request data to log aggregators and is intentional.
+ 
+-### Next.js Track
+-- Next.js 15 (App Router)
+-- TypeScript
+-- Prisma + SQLite
+-- Tailwind CSS + shadcn/ui
+-- NextAuth.js
++## Seed credentials
+ 
+-### FastAPI Track
+-- Python 3.12+
+-- FastAPI + Uvicorn
+-- SQLAlchemy 2.0 + Alembic
+-- Pydantic v2
+-- JWT authentication
++### Next.js
+ 
+-## Data Model
++| Email | Password | Role |
++|---|---|---|
++| `alice@example.com` | `password123` | ADMIN |
++| `bob@example.com` | `password123` | MEMBER |
++| `charlie@example.com` | `password123` | VIEWER |
+ 
+-Both tracks share the same entities:
+-- User (email, password, name, role)
+-- Project (name, description, status, owner)
+-- Task (title, description, status, priority, assignee)
+-- Comment (content, author, task)
+-- Label (name, color, project)
++### FastAPI
+ 
+----
++| Email | Password | Role |
++|---|---|---|
++| `admin@taskforge.com` | `admin123` | ADMIN |
++| `alice@taskforge.com` | `alice123` | MEMBER |
++| `bob@taskforge.com` | `bob123` | MEMBER |
++| `viewer@taskforge.com` | `viewer123` | VIEWER |
+ 
+-> **Note:** This CLAUDE.md is intentionally minimal. In Tutorial 2, you'll learn how to expand it with architecture details, coding conventions, common commands, and more.
++Note that the two tracks use different email domains and different passwords — don't assume a credential from one track works in the other.
+diff --git a/fastapi/app/main.py b/fastapi/app/main.py
+index 9b9533f..6929ce9 100644
+--- a/fastapi/app/main.py
++++ b/fastapi/app/main.py
+@@ -1,7 +1,7 @@
+ from fastapi import FastAPI
+ from fastapi.middleware.cors import CORSMiddleware
+ from app.config import settings
+-from app.routers import auth, projects, tasks, comments
++from app.routers import auth, projects, tasks, comments, notifications, widgets, time_entries, sprints
+ 
+ app = FastAPI(
+     title="TaskForge API",
+@@ -25,6 +25,11 @@ app.include_router(auth.router)
+ app.include_router(projects.router)
+ app.include_router(tasks.router)
+ app.include_router(comments.router)
++app.include_router(notifications.router)
++app.include_router(widgets.router)
++app.include_router(time_entries.router_tasks)
++app.include_router(time_entries.router_entries)
++app.include_router(sprints.router)
+ 
+ 
+ @app.get("/")
+diff --git a/fastapi/app/models/__init__.py b/fastapi/app/models/__init__.py
+index 3ec577e..bb19aff 100644
+--- a/fastapi/app/models/__init__.py
++++ b/fastapi/app/models/__init__.py
+@@ -3,5 +3,25 @@ from app.models.project import Project
+ from app.models.task import Task
+ from app.models.comment import Comment
+ from app.models.label import Label, TaskLabel
++from app.models.notification import Notification, NotificationType
++from app.models.tag import Tag, TaskTag
++from app.models.widget import Widget
++from app.models.time_entry import TimeEntry
++from app.models.sprint import Sprint, SprintStatus
+ 
+-__all__ = ["User", "Project", "Task", "Comment", "Label", "TaskLabel"]
++__all__ = [
++    "User",
++    "Project",
++    "Task",
++    "Comment",
++    "Label",
++    "TaskLabel",
++    "Notification",
++    "NotificationType",
++    "Tag",
++    "TaskTag",
++    "Widget",
++    "TimeEntry",
++    "Sprint",
++    "SprintStatus",
++]
+diff --git a/fastapi/app/models/project.py b/fastapi/app/models/project.py
+index b342e70..54e455c 100644
+--- a/fastapi/app/models/project.py
++++ b/fastapi/app/models/project.py
+@@ -29,3 +29,4 @@ class Project(Base):
+     owner: Mapped["User"] = relationship("User", back_populates="owned_projects")
+     tasks: Mapped[list["Task"]] = relationship("Task", back_populates="project")
+     labels: Mapped[list["Label"]] = relationship("Label", back_populates="project")
++    sprints: Mapped[list["Sprint"]] = relationship("Sprint", back_populates="project")
+diff --git a/fastapi/app/models/task.py b/fastapi/app/models/task.py
+index 0620a10..3dad8ee 100644
+--- a/fastapi/app/models/task.py
++++ b/fastapi/app/models/task.py
+@@ -32,6 +32,9 @@ class Task(Base):
+     )
+     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
++    sprint_id: Mapped[int | None] = mapped_column(
++        ForeignKey("sprints.id", ondelete="SET NULL"), nullable=True
++    )
+     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+     updated_at: Mapped[datetime] = mapped_column(
+         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+@@ -40,7 +43,14 @@ class Task(Base):
+     # Relationships
+     project: Mapped["Project"] = relationship("Project", back_populates="tasks")
+     assignee: Mapped["User"] = relationship("User", back_populates="assigned_tasks")
++    sprint: Mapped["Sprint | None"] = relationship("Sprint", back_populates="tasks")
+     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="task")
+     labels: Mapped[list["Label"]] = relationship(
+         "Label", secondary="task_labels", back_populates="tasks"
+     )
++    tags: Mapped[list["Tag"]] = relationship(
++        "Tag", secondary="task_tags", back_populates="tasks"
++    )
++    time_entries: Mapped[list["TimeEntry"]] = relationship(
++        "TimeEntry", back_populates="task", cascade="all, delete-orphan"
++    )
+diff --git a/fastapi/app/models/user.py b/fastapi/app/models/user.py
+index 1c0067f..c9b00de 100644
+--- a/fastapi/app/models/user.py
++++ b/fastapi/app/models/user.py
+@@ -32,3 +32,12 @@ class User(Base):
+         "Task", back_populates="assignee", foreign_keys="Task.assignee_id"
+     )
+     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="author")
++    notifications: Mapped[list["Notification"]] = relationship(
++        "Notification",
++        back_populates="user",
++        cascade="all, delete-orphan",
++        foreign_keys="Notification.user_id",
++    )
++    time_entries: Mapped[list["TimeEntry"]] = relationship(
++        "TimeEntry", back_populates="user", cascade="all, delete-orphan"
++    )
+diff --git a/fastapi/app/routers/comments.py b/fastapi/app/routers/comments.py
+index 18b1923..9022eb9 100644
+--- a/fastapi/app/routers/comments.py
++++ b/fastapi/app/routers/comments.py
+@@ -9,6 +9,7 @@ from app.models.project import Project
+ from app.utils.security import get_current_user
+ from app.models.user import User
+ from app.utils.exceptions import NotFoundException, ForbiddenException
++from app.services.notification_service import notify_mentions
+ 
+ router = APIRouter(prefix="/api/tasks", tags=["comments"])
+ 
+@@ -58,4 +59,5 @@ def create_task_comment(
+     db.add(comment)
+     db.commit()
+     db.refresh(comment)
++    notify_mentions(db, current_user, comment)
+     return comment
+diff --git a/fastapi/app/schemas/__init__.py b/fastapi/app/schemas/__init__.py
+index 36a088d..0a7c7e7 100644
+--- a/fastapi/app/schemas/__init__.py
++++ b/fastapi/app/schemas/__init__.py
+@@ -2,6 +2,12 @@ from app.schemas.user import User, UserCreate, UserLogin, Token
+ from app.schemas.project import Project, ProjectCreate, ProjectUpdate
+ from app.schemas.task import Task, TaskCreate, TaskUpdate
+ from app.schemas.comment import Comment, CommentCreate
++from app.schemas.notification import (
++    Notification,
++    NotificationCreate,
++    UnreadCount,
++    ReadAllResponse,
++)
+ 
+ __all__ = [
+     "User",
+@@ -16,4 +22,8 @@ __all__ = [
+     "TaskUpdate",
+     "Comment",
+     "CommentCreate",
++    "Notification",
++    "NotificationCreate",
++    "UnreadCount",
++    "ReadAllResponse",
+ ]
+diff --git a/fastapi/app/services/auth_service.py b/fastapi/app/services/auth_service.py
+index 04cd74e..369d4f1 100644
+--- a/fastapi/app/services/auth_service.py
++++ b/fastapi/app/services/auth_service.py
+@@ -39,4 +39,4 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
+ 
+ 
+ def generate_token(user: User) -> str:
+-    return create_access_token(data={"sub": user.id})
++    return create_access_token(data={"sub": str(user.id)})
+diff --git a/fastapi/app/utils/security.py b/fastapi/app/utils/security.py
+index ad74040..c217ec5 100644
+--- a/fastapi/app/utils/security.py
++++ b/fastapi/app/utils/security.py
+@@ -37,7 +37,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
+     )
+     try:
+         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+-        user_id: int = payload.get("sub")
++        user_id: int = int(payload.get("sub"))
+         if user_id is None:
+             raise credentials_exception
+     except JWTError:
+diff --git a/fastapi/pyproject.toml b/fastapi/pyproject.toml
+index 10adf32..74c19e5 100644
+--- a/fastapi/pyproject.toml
++++ b/fastapi/pyproject.toml
+@@ -12,6 +12,7 @@ dependencies = [
+     "pydantic-settings>=2.4.0",
+     "python-jose[cryptography]>=3.3.0",
+     "passlib[bcrypt]>=1.7.4",
++    "bcrypt<4.0",
+     "python-multipart>=0.0.9",
+ ]
+ 
+@@ -27,6 +28,9 @@ dev = [
+ requires = ["hatchling"]
+ build-backend = "hatchling.build"
+ 
++[tool.hatch.build.targets.wheel]
++packages = ["app"]
++
+ [tool.ruff]
+ line-length = 100
+ target-version = "py312"
+diff --git a/nextjs/app/api/comments/route.ts b/nextjs/app/api/comments/route.ts
+index d0b9461..dc4293d 100644
+--- a/nextjs/app/api/comments/route.ts
++++ b/nextjs/app/api/comments/route.ts
+@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
+ import { authOptions } from "@/lib/auth";
+ import { prisma } from "@/lib/db";
+ import { z } from "zod";
++import { notifyMentions } from "@/lib/notifications";
+ 
+ const commentSchema = z.object({
+   content: z.string().min(1),
+@@ -12,7 +13,6 @@ const commentSchema = z.object({
+ export async function POST(req: Request) {
+   try {
+     const session = await getServerSession(authOptions);
+-
+     if (!session?.user) {
+       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+     }
+@@ -37,6 +37,13 @@ export async function POST(req: Request) {
+       },
+     });
+ 
++    await notifyMentions({
++      actorId: (session.user as any).id,
++      body: comment.content,
++      taskId: comment.taskId,
++      commentId: comment.id,
++    });
++
+     return NextResponse.json(comment, { status: 201 });
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+diff --git a/nextjs/app/api/tasks/[id]/route.ts b/nextjs/app/api/tasks/[id]/route.ts
+index 3c07c36..974729f 100644
+--- a/nextjs/app/api/tasks/[id]/route.ts
++++ b/nextjs/app/api/tasks/[id]/route.ts
+@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
+ import { authOptions } from "@/lib/auth";
+ import { prisma } from "@/lib/db";
+ import { z } from "zod";
++import { notifyTaskAssigned, notifyTaskCompleted } from "@/lib/notifications";
+ 
+ const taskUpdateSchema = z.object({
+   title: z.string().min(1).optional(),
+@@ -10,6 +11,7 @@ const taskUpdateSchema = z.object({
+   status: z.enum(["TODO", "IN_PROGRESS", "DONE"]).optional(),
+   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+   assigneeId: z.string().nullable().optional(),
++  dueDate: z.string().datetime().optional().nullable(),
+ });
+ 
+ export async function GET(
+@@ -94,6 +96,9 @@ export async function PATCH(
+       return NextResponse.json({ error: "Task not found" }, { status: 404 });
+     }
+ 
++    const priorAssigneeId = task.assigneeId;
++    const priorStatus = task.status;
++
+     const updatedTask = await prisma.task.update({
+       where: { id },
+       data,
+@@ -114,6 +119,22 @@ export async function PATCH(
+       },
+     });
+ 
++    const actorId = (session.user as any).id;
++    if (
++      "assigneeId" in data &&
++      updatedTask.assigneeId &&
++      updatedTask.assigneeId !== priorAssigneeId
++    ) {
++      await notifyTaskAssigned({
++        actorId,
++        taskId: updatedTask.id,
++        assigneeId: updatedTask.assigneeId,
++      });
++    }
++    if (updatedTask.status === "DONE" && priorStatus !== "DONE") {
++      await notifyTaskCompleted({ actorId, taskId: updatedTask.id });
++    }
++
+     return NextResponse.json(updatedTask);
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+diff --git a/nextjs/app/layout.tsx b/nextjs/app/layout.tsx
+index d4686ba..6fa2628 100644
+--- a/nextjs/app/layout.tsx
++++ b/nextjs/app/layout.tsx
+@@ -5,6 +5,8 @@ import { getServerSession } from "next-auth";
+ import { authOptions } from "@/lib/auth";
+ import Link from "next/link";
+ import { Button } from "@/components/ui/button";
++import { NotificationsProvider } from "@/components/notifications-provider";
++import { NotificationBell } from "@/components/notification-bell";
+ 
+ const inter = Inter({ subsets: ["latin"] });
+ 
+@@ -24,32 +26,35 @@ export default async function RootLayout({
+     <html lang="en">
+       <body className={inter.className}>
+         {session ? (
+-          <div className="min-h-screen bg-background">
+-            <nav className="border-b">
+-              <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+-                <Link href="/" className="text-2xl font-bold">
+-                  TaskForge
+-                </Link>
+-                <div className="flex items-center gap-4">
+-                  <Link href="/" className="text-sm hover:underline">
+-                    Dashboard
++          <NotificationsProvider>
++            <div className="min-h-screen bg-background">
++              <nav className="border-b">
++                <div className="container mx-auto px-4 py-4 flex items-center justify-between">
++                  <Link href="/" className="text-2xl font-bold">
++                    TaskForge
+                   </Link>
+-                  <Link href="/projects" className="text-sm hover:underline">
+-                    Projects
+-                  </Link>
+-                  <span className="text-sm text-muted-foreground">
+-                    {session.user?.name}
+-                  </span>
+-                  <form action="/api/auth/signout" method="POST">
+-                    <Button variant="outline" size="sm" type="submit">
+-                      Sign Out
+-                    </Button>
+-                  </form>
++                  <div className="flex items-center gap-4">
++                    <Link href="/" className="text-sm hover:underline">
++                      Dashboard
++                    </Link>
++                    <Link href="/projects" className="text-sm hover:underline">
++                      Projects
++                    </Link>
++                    <NotificationBell />
++                    <span className="text-sm text-muted-foreground">
++                      {session.user?.name}
++                    </span>
++                    <form action="/api/auth/signout" method="POST">
++                      <Button variant="outline" size="sm" type="submit">
++                        Sign Out
++                      </Button>
++                    </form>
++                  </div>
+                 </div>
+-              </div>
+-            </nav>
+-            <main className="container mx-auto px-4 py-8">{children}</main>
+-          </div>
++              </nav>
++              <main className="container mx-auto px-4 py-8">{children}</main>
++            </div>
++          </NotificationsProvider>
+         ) : (
+           children
+         )}
+diff --git a/nextjs/lib/types.ts b/nextjs/lib/types.ts
+index 7adeb98..d9bdd7b 100644
+--- a/nextjs/lib/types.ts
++++ b/nextjs/lib/types.ts
+@@ -1,4 +1,4 @@
+-import { User, Project, Task, Comment, Label, Role, ProjectStatus, TaskStatus, Priority } from "@prisma/client";
++import { User, Project, Task, Comment, Label, TimeEntry, Notification } from "@prisma/client";
+ 
+ export type {
+   User,
+@@ -6,10 +6,8 @@ export type {
+   Task,
+   Comment,
+   Label,
+-  Role,
+-  ProjectStatus,
+-  TaskStatus,
+-  Priority,
++  TimeEntry,
++  Notification,
+ };
+ 
+ export type TaskWithDetails = Task & {
+@@ -22,3 +20,21 @@ export type ProjectWithTasks = Project & {
+   tasks: Task[];
+   owner: User;
+ };
++
++// For use in route handler files only — not in components (components import from @prisma/client directly)
++export type TimeEntryWithUser = TimeEntry & {
++  user: Pick<User, "id" | "name" | "email">;
++};
++
++export type NotificationType = "TASK_ASSIGNED" | "TASK_COMPLETED" | "MENTION";
++
++export type TaskStatus = "TODO" | "IN_PROGRESS" | "DONE";
++export type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
++export type Role = "ADMIN" | "MEMBER" | "VIEWER";
++export type ProjectStatus = "ACTIVE" | "ARCHIVED";
++
++export type NotificationWithRelations = Notification & {
++  actor: Pick<User, "id" | "name" | "email">;
++  task: Pick<Task, "id" | "title" | "projectId"> | null;
++  comment: Pick<Comment, "id" | "content"> | null;
++};
+diff --git a/nextjs/package.json b/nextjs/package.json
+index 0b48630..c416cc9 100644
+--- a/nextjs/package.json
++++ b/nextjs/package.json
+@@ -23,7 +23,7 @@
+     "bcryptjs": "^2.4.3",
+     "zod": "^3.24.1",
+     "clsx": "^2.1.1",
+-    "tailwind-merge": "^2.7.0",
++    "tailwind-merge": "^2.6.1",
+     "class-variance-authority": "^0.7.1",
+     "lucide-react": "^0.468.0",
+     "@radix-ui/react-dialog": "^1.1.4",
+@@ -43,7 +43,8 @@
+     "tailwindcss": "^3.4.17",
+     "postcss": "^8.4.49",
+     "autoprefixer": "^10.4.20",
+-    "eslint": "^8.57.1",
++    "eslint": "^9",
++    "@eslint/eslintrc": "^3",
+     "eslint-config-next": "15.1.0",
+     "@testing-library/react": "^16.1.0",
+     "@testing-library/jest-dom": "^6.6.3",
+diff --git a/nextjs/prisma/schema.prisma b/nextjs/prisma/schema.prisma
+index 7bef646..4acd147 100644
+--- a/nextjs/prisma/schema.prisma
++++ b/nextjs/prisma/schema.prisma
+@@ -7,73 +7,72 @@ datasource db {
+   url      = env("DATABASE_URL")
+ }
+ 
+-enum Role {
+-  ADMIN
+-  MEMBER
+-  VIEWER
+-}
+-
+-enum ProjectStatus {
+-  ACTIVE
+-  ARCHIVED
+-}
+-
+-enum TaskStatus {
+-  TODO
+-  IN_PROGRESS
+-  DONE
+-}
+-
+-enum Priority {
+-  LOW
+-  MEDIUM
+-  HIGH
+-  URGENT
+-}
+-
+ model User {
+   id        String   @id @default(cuid())
+   email     String   @unique
+   password  String
+   name      String
+-  role      Role     @default(MEMBER)
++  role      String   @default("MEMBER")
+   createdAt DateTime @default(now())
+   updatedAt DateTime @updatedAt
+ 
+-  ownedProjects Project[]
+-  assignedTasks Task[]
+-  comments      Comment[]
++  ownedProjects          Project[]
++  assignedTasks          Task[]
++  comments               Comment[]
++  notifications          Notification[] @relation("NotificationRecipient")
++  triggeredNotifications Notification[] @relation("NotificationActor")
++  widgets                Widget[]
++  timeEntries            TimeEntry[]
+ }
+ 
+ model Project {
+   id          String        @id @default(cuid())
+   name        String
+   description String?
+-  status      ProjectStatus @default(ACTIVE)
++  status      String   @default("ACTIVE")
+   ownerId     String
+   createdAt   DateTime      @default(now())
+   updatedAt   DateTime      @updatedAt
+ 
+-  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+-  tasks  Task[]
+-  labels Label[]
++  owner   User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
++  tasks   Task[]
++  labels  Label[]
++  sprints Sprint[]
+ }
+ 
+ model Task {
+   id          String     @id @default(cuid())
+   title       String
+   description String?
+-  status      TaskStatus @default(TODO)
+-  priority    Priority   @default(MEDIUM)
++  status      String   @default("TODO")
++  priority    String   @default("MEDIUM")
+   projectId   String
+   assigneeId  String?
++  sprintId    String?
+   createdAt   DateTime   @default(now())
+   updatedAt   DateTime   @updatedAt
+ 
+-  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+-  assignee   User?       @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+-  comments   Comment[]
+-  taskLabels TaskLabel[]
++  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
++  assignee      User?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
++  sprint        Sprint?        @relation(fields: [sprintId], references: [id], onDelete: SetNull)
++  comments      Comment[]
++  taskLabels    TaskLabel[]
++  notifications Notification[]
++  timeEntries   TimeEntry[]
++}
++
++model Sprint {
++  id        String   @id @default(cuid())
++  name      String
++  startDate DateTime
++  endDate   DateTime
++  status    String   @default("PLANNING")
++  projectId String
++  createdAt DateTime @default(now())
++  updatedAt DateTime @updatedAt
++
++  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
++  tasks   Task[]
+ }
+ 
+ model Comment {
+@@ -84,8 +83,9 @@ model Comment {
+   createdAt DateTime @default(now())
+   updatedAt DateTime @updatedAt
+ 
+-  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
++  task          Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
++  author        User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
++  notifications Notification[]
+ }
+ 
+ model Label {
+@@ -108,3 +108,45 @@ model TaskLabel {
+ 
+   @@id([taskId, labelId])
+ }
++
++model Widget {
++  id        String   @id @default(cuid())
++  name      String
++  ownerId   String
++  createdAt DateTime @default(now())
++  updatedAt DateTime @updatedAt
++
++  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
++}
++
++model TimeEntry {
++  id              String   @id @default(cuid())
++  durationSeconds Int
++  description     String?
++  taskId          String
++  userId          String
++  createdAt       DateTime @default(now())
++  updatedAt       DateTime @updatedAt
++
++  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
++  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
++}
++
++model Notification {
++  id        String   @id @default(cuid())
++  userId    String
++  actorId   String
++  type      String   @default("TASK_ASSIGNED")
++  taskId    String?
++  commentId String?
++  read      Boolean  @default(false)
++  createdAt DateTime @default(now())
++
++  user    User     @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
++  actor   User     @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
++  task    Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
++  comment Comment? @relation(fields: [commentId], references: [id], onDelete: SetNull)
++
++  @@index([userId])
++  @@index([userId, read])
++}
+diff --git a/nextjs/prisma/seed.ts b/nextjs/prisma/seed.ts
+index af525ee..23a67a2 100644
+--- a/nextjs/prisma/seed.ts
++++ b/nextjs/prisma/seed.ts
+@@ -1,242 +1,42 @@
+ import { PrismaClient } from "@prisma/client";
+-import { hash } from "bcryptjs";
++import { seedUsers } from "./seeds/users";
++import { seedProjects } from "./seeds/projects";
++import { seedTasks } from "./seeds/tasks";
++import { seedComments } from "./seeds/comments";
++import { seedLabels } from "./seeds/labels";
+ 
+ const prisma = new PrismaClient();
+ 
+ async function main() {
+   console.log("Starting seed...");
+ 
+-  // Create users
+-  const password = await hash("password123", 12);
++  const users = await seedUsers(prisma);
++  console.log("Created users:", users);
+ 
+-  const alice = await prisma.user.upsert({
+-    where: { email: "alice@example.com" },
+-    update: {},
+-    create: {
+-      email: "alice@example.com",
+-      password,
+-      name: "Alice Johnson",
+-      role: "ADMIN",
+-    },
+-  });
+-
+-  const bob = await prisma.user.upsert({
+-    where: { email: "bob@example.com" },
+-    update: {},
+-    create: {
+-      email: "bob@example.com",
+-      password,
+-      name: "Bob Smith",
+-      role: "MEMBER",
+-    },
+-  });
+-
+-  const charlie = await prisma.user.upsert({
+-    where: { email: "charlie@example.com" },
+-    update: {},
+-    create: {
+-      email: "charlie@example.com",
+-      password,
+-      name: "Charlie Davis",
+-      role: "VIEWER",
+-    },
+-  });
+-
+-  console.log("Created users:", { alice, bob, charlie });
+-
+-  // Create projects
+-  const project1 = await prisma.project.create({
+-    data: {
+-      name: "TaskForge Development",
+-      description: "Build the next generation project management tool",
+-      status: "ACTIVE",
+-      ownerId: alice.id,
+-    },
+-  });
+-
+-  const project2 = await prisma.project.create({
+-    data: {
+-      name: "Marketing Campaign",
+-      description: "Q1 2024 marketing initiatives",
+-      status: "ACTIVE",
+-      ownerId: alice.id,
+-    },
+-  });
+-
+-  const project3 = await prisma.project.create({
+-    data: {
+-      name: "Legacy System Migration",
+-      description: "Migrate old infrastructure to cloud",
+-      status: "ARCHIVED",
+-      ownerId: alice.id,
+-    },
+-  });
+-
+-  console.log("Created projects:", { project1, project2, project3 });
+-
+-  // Create tasks for project 1
+-  const task1 = await prisma.task.create({
+-    data: {
+-      title: "Setup authentication system",
+-      description: "Implement NextAuth.js with credentials provider",
+-      status: "DONE",
+-      priority: "HIGH",
+-      projectId: project1.id,
+-      assigneeId: alice.id,
+-    },
+-  });
+-
+-  const task2 = await prisma.task.create({
+-    data: {
+-      title: "Design database schema",
+-      description: "Create Prisma schema for all models",
+-      status: "DONE",
+-      priority: "URGENT",
+-      projectId: project1.id,
+-      assigneeId: alice.id,
+-    },
+-  });
+-
+-  const task3 = await prisma.task.create({
+-    data: {
+-      title: "Build task board UI",
+-      description: "Create Kanban board with drag and drop",
+-      status: "IN_PROGRESS",
+-      priority: "HIGH",
+-      projectId: project1.id,
+-      assigneeId: bob.id,
+-    },
+-  });
+-
+-  const task4 = await prisma.task.create({
+-    data: {
+-      title: "Add comment functionality",
+-      description: "Allow users to comment on tasks",
+-      status: "TODO",
+-      priority: "MEDIUM",
+-      projectId: project1.id,
+-      assigneeId: bob.id,
+-    },
+-  });
+-
+-  const task5 = await prisma.task.create({
+-    data: {
+-      title: "Implement project archiving",
+-      description: "Add ability to archive completed projects",
+-      status: "TODO",
+-      priority: "LOW",
+-      projectId: project1.id,
+-    },
+-  });
+-
+-  // Create tasks for project 2
+-  const task6 = await prisma.task.create({
+-    data: {
+-      title: "Social media strategy",
+-      description: "Develop comprehensive social media plan",
+-      status: "IN_PROGRESS",
+-      priority: "HIGH",
+-      projectId: project2.id,
+-      assigneeId: bob.id,
+-    },
+-  });
+-
+-  const task7 = await prisma.task.create({
+-    data: {
+-      title: "Email campaign design",
+-      description: "Create email templates for campaign",
+-      status: "TODO",
+-      priority: "MEDIUM",
+-      projectId: project2.id,
+-    },
+-  });
+-
+-  const task8 = await prisma.task.create({
+-    data: {
+-      title: "Analytics dashboard setup",
+-      description: "Configure tracking and analytics",
+-      status: "TODO",
+-      priority: "MEDIUM",
+-      projectId: project2.id,
+-      assigneeId: charlie.id,
+-    },
+-  });
++  const projects = await seedProjects(prisma, users.alice.id);
++  console.log("Created projects:", projects);
+ 
++  const tasks = await seedTasks(
++    prisma,
++    { project1Id: projects.project1.id, project2Id: projects.project2.id },
++    { aliceId: users.alice.id, bobId: users.bob.id, charlieId: users.charlie.id },
++  );
+   console.log("Created tasks");
+ 
+-  // Create comments
+-  await prisma.comment.create({
+-    data: {
+-      content: "Great work on the authentication! Testing it now.",
+-      taskId: task1.id,
+-      authorId: bob.id,
+-    },
+-  });
+-
+-  await prisma.comment.create({
+-    data: {
+-      content: "Thanks! Let me know if you find any issues.",
+-      taskId: task1.id,
+-      authorId: alice.id,
+-    },
+-  });
+-
+-  await prisma.comment.create({
+-    data: {
+-      content: "The Kanban board is coming along nicely. Should be done by end of week.",
+-      taskId: task3.id,
+-      authorId: bob.id,
+-    },
+-  });
+-
+-  await prisma.comment.create({
+-    data: {
+-      content: "We need to prioritize the social media content calendar.",
+-      taskId: task6.id,
+-      authorId: alice.id,
+-    },
+-  });
+-
++  await seedComments(
++    prisma,
++    { task1Id: tasks.task1.id, task3Id: tasks.task3.id, task6Id: tasks.task6.id },
++    { aliceId: users.alice.id, bobId: users.bob.id },
++  );
+   console.log("Created comments");
+ 
+-  // Create labels
+-  const bugLabel = await prisma.label.create({
+-    data: {
+-      name: "Bug",
+-      color: "#ef4444",
+-      projectId: project1.id,
+-    },
+-  });
+-
+-  const featureLabel = await prisma.label.create({
+-    data: {
+-      name: "Feature",
+-      color: "#3b82f6",
+-      projectId: project1.id,
+-    },
+-  });
+-
+-  const urgentLabel = await prisma.label.create({
+-    data: {
+-      name: "Urgent",
+-      color: "#f97316",
+-      projectId: project2.id,
+-    },
+-  });
+-
++  await seedLabels(
++    prisma,
++    { project1Id: projects.project1.id, project2Id: projects.project2.id },
++    { task1Id: tasks.task1.id, task2Id: tasks.task2.id, task3Id: tasks.task3.id, task6Id: tasks.task6.id },
++  );
+   console.log("Created labels");
+ 
+-  // Assign labels to tasks
+-  await prisma.taskLabel.createMany({
+-    data: [
+-      { taskId: task1.id, labelId: featureLabel.id },
+-      { taskId: task2.id, labelId: featureLabel.id },
+-      { taskId: task3.id, labelId: featureLabel.id },
+-      { taskId: task6.id, labelId: urgentLabel.id },
+-    ],
+-  });
+-
+-  console.log("Assigned labels to tasks");
+   console.log("Seed completed successfully!");
+ }
+ 
