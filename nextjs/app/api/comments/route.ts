@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { z } from "zod";
+import { notifyMentions } from "@/lib/notifications";
 
 const commentSchema = z.object({
   content: z.string().min(1),
@@ -12,7 +13,6 @@ const commentSchema = z.object({
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -35,6 +35,13 @@ export async function POST(req: Request) {
           },
         },
       },
+    });
+
+    await notifyMentions({
+      actorId: (session.user as any).id,
+      body: comment.content,
+      taskId: comment.taskId,
+      commentId: comment.id,
     });
 
     return NextResponse.json(comment, { status: 201 });

@@ -24,21 +24,21 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
       className="cursor-pointer hover:shadow-md transition-shadow"
       onClick={onClick}
     >
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <CardTitle className="text-base font-medium">{task.title}</CardTitle>
+      <CardHeader className="p-3 pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-sm font-medium leading-snug">{task.title}</CardTitle>
           <span
-            className={`text-xs px-2 py-1 rounded-full ${
-              priorityColors[task.priority]
+            className={`shrink-0 text-xs px-1.5 py-0.5 rounded-full ${
+              priorityColors[task.priority as keyof typeof priorityColors]
             }`}
           >
             {task.priority}
           </span>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-3 pt-0">
         {task.description && (
-          <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+          <p className="text-xs text-muted-foreground mb-2 line-clamp-1">
             {task.description}
           </p>
         )}
@@ -49,8 +49,15 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           </div>
           <div className="flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            <span>{new Date(task.createdAt).toLocaleDateString()}</span>
+            <span>
+              {task.dueDate
+                ? new Date(task.dueDate).toISOString().slice(0, 10)
+                : "No due date"}
+            </span>
           </div>
+        </div>
+        <div className="text-xs text-muted-foreground mt-1">
+          {new Date(task.updatedAt).toLocaleDateString()}
         </div>
       </CardContent>
     </Card>

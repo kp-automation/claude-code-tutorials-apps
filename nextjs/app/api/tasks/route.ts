@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { z } from "zod";
+import { notifyTaskAssigned, notifyTaskCompleted } from "@/lib/notifications";
 
 const taskSchema = z.object({
   title: z.string().min(1),
@@ -100,6 +101,14 @@ export async function POST(req: Request) {
         },
       },
     });
+
+    const actorId = (session.user as any).id;
+    if (task.assigneeId) {
+      await notifyTaskAssigned({ actorId, taskId: task.id, assigneeId: task.assigneeId });
+    }
+    if (task.status === "DONE") {
+      await notifyTaskCompleted({ actorId, taskId: task.id });
+    }
 
     return NextResponse.json(task, { status: 201 });
   } catch (error) {
