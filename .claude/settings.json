@@ -1,0 +1,69 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm view *)"
+    ]
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/kellypunzalan/Documents/github-projects/taskforge/.claude/hooks/auto-checkpoint.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/kellypunzalan/Documents/github-projects/taskforge/.claude/hooks/redact-credentials.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/kellypunzalan/Documents/github-projects/taskforge/.claude/hooks/audit-log.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/kellypunzalan/Documents/github-projects/taskforge/.claude/hooks/ralph-logger.sh"
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/kellypunzalan/Documents/github-projects/taskforge/.claude/hooks/track-activity.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MSG=$(cat | jq -r '.message // \"Claude Code notification\"') && osascript -e \"display notification \\\"$MSG\\\" with title \\\"Claude Code\\\"\" 2>/dev/null || notify-send \"Claude Code\" \"$MSG\" 2>/dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}

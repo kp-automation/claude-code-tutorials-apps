@@ -1,0 +1,76 @@
+{
+  "current_stage": "validate",
+  "feature": "time-tracking",
+  "stages": [
+    {
+      "name": "spec",
+      "agent": "pm-spec",
+      "status": "completed",
+      "input": ".tasks/requests/time-tracking.md",
+      "output": ".tasks/specs/time-tracking.md"
+    },
+    {
+      "name": "review",
+      "agent": "architect-review",
+      "status": "completed",
+      "input": ".tasks/specs/time-tracking.md",
+      "output": ".tasks/reviews/time-tracking-review.md"
+    },
+    {
+      "name": "implement",
+      "agent": "implementer-tester",
+      "status": "completed",
+      "input": ".tasks/specs/time-tracking.md",
+      "output": "src/**"
+    },
+    {
+      "name": "validate",
+      "agent": "validator",
+      "status": "in-progress",
+      "input": "src/**",
+      "output": ".tasks/reviews/time-tracking-validation.md"
+    }
+  ],
+  "history": [
+    {
+      "stage": "pm-spec",
+      "completed_at": "2026-05-14T21:40:28Z"
+    },
+    {
+      "stage": "architect-review",
+      "completed_at": "2026-05-14T21:48:29Z"
+    },
+    {
+      "stage": "implementer-tester",
+      "completed_at": "2026-05-14T21:53:45Z"
+    },
+    {
+      "stage": "code-review",
+      "completed_at": "2026-05-14T22:02:28Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-14T22:23:47Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-14T22:33:34Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-15T14:28:34Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-15T14:47:19Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-15T15:23:38Z"
+    },
+    {
+      "stage": "",
+      "completed_at": "2026-05-15T19:42:15Z"
+    }
+  ]
+}

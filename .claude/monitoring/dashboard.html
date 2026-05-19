@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ralph — Agent Dashboard</title>
+  <style>
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #c9d1d9;
+      --muted:    #8b949e;
+      --green:    #3fb950;
+      --red:      #f85149;
+      --yellow:   #d29922;
+      --blue:     #58a6ff;
+      --purple:   #bc8cff;
+      --orange:   #ffa657;
+      --radius:   6px;
+      --mono:     'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 20px; font-weight: 600; }
+    #refresh-info { font-size: 12px; color: var(--muted); margin-left: auto; }
+    #status-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; background: var(--muted);
+      margin-right: 6px; vertical-align: middle;
+    }
+    #status-dot.active { background: var(--green); animation: pulse 2s infinite; }
+    #status-dot.error  { background: var(--red); }
+    @keyframes pulse {
+      0%,100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    /* ── Stat cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+    }
+    .card .num  { font-size: 32px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+    .card .lbl  { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    .card.green .num { color: var(--green); }
+    .card.red   .num { color: var(--red); }
+    .card.yellow .num { color: var(--yellow); }
+    .card.blue  .num { color: var(--blue); }
+    .card.purple .num { color: var(--purple); }
+
+    /* ── Two-column layout ── */
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+
+    /* ── Panels ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--muted);
+    }
+    .panel-header .count {
+      background: var(--border);
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 11px;
+    }
+    .panel-body {
+      overflow-y: auto;
+      max-height: 380px;
+      padding: 10px 0;
+    }
+
+    /* ── Event list ── */
+    .event {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 14px;
+      border-bottom: 1px solid transparent;
+      transition: background .1s;
+    }
+    .event:hover { background: rgba(255,255,255,.03); }
+    .event-icon { width: 18px; text-align: center; flex-shrink: 0; margin-top: 1px; }
+    .event-body { flex: 1; min-width: 0; }
+    .event-title {
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .event-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-family: var(--mono);
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-right: 4px;
+    }
+    .badge.SELECT  { background: #1c3250; color: var(--blue); }
+    .badge.PLAN    { background: #2d1f52; color: var(--purple); }
+    .badge.IMPL    { background: #1c2e1c; color: var(--green); }
+    .badge.VERIFY  { background: #2d2500; color: var(--yellow); }
+    .badge.COMMIT  { background: #1c2e1c; color: var(--green); }
+    .badge.DONE    { background: #1c2e1c; color: var(--green); }
+    .badge.CHKPT   { background: #1c2530; color: var(--muted); }
+    .badge.FAILED  { background: #3d1515; color: var(--red); }
+
+    /* ── Ralph log (monospace stream) ── */
+    #ralph-log {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.6;
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--text);
+      max-height: 440px;
+      overflow-y: auto;
+    }
+
+    /* Phase coloring in the raw log */
+    .log-SELECT { color: var(--blue); }
+    .log-PLAN   { color: var(--purple); }
+    .log-IMPL   { color: var(--green); }
+    .log-VERIFY { color: var(--yellow); }
+    .log-COMMIT { color: #3fb950cc; }
+    .log-DONE   { color: var(--green); font-weight: 600; }
+    .log-CHKPT  { color: var(--muted); }
+    .log-error  { color: var(--red); }
+
+    /* ── Activity log ── */
+    #activity-log {
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.7;
+      padding: 10px 14px;
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--muted);
+    }
+    .act-ok  { color: var(--text); }
+    .act-err { color: var(--red); }
+
+    /* ── Empty state ── */
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 40px 20px;
+      font-size: 13px;
+    }
+    .empty code {
+      display: block;
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--border);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      text-align: left;
+      max-width: 420px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* ── Footer ── */
+    footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    footer code {
+      font-family: var(--mono);
+      background: var(--border);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span id="status-dot"></span>
+  <h1>Ralph — Agent Dashboard</h1>
+  <span id="refresh-info">Loading…</span>
+</header>
+
+<!-- Summary cards -->
+<div class="cards">
+  <div class="card blue">
+    <div class="num" id="c-queue">–</div>
+    <div class="lbl">Queue</div>
+  </div>
+  <div class="card purple">
+    <div class="num" id="c-inprog">–</div>
+    <div class="lbl">In Progress</div>
+  </div>
+  <div class="card green">
+    <div class="num" id="c-done">–</div>
+    <div class="lbl">Completed</div>
+  </div>
+  <div class="card red">
+    <div class="num" id="c-blocked">–</div>
+    <div class="lbl">Blocked</div>
+  </div>
+  <div class="card yellow">
+    <div class="num" id="c-calls">–</div>
+    <div class="lbl">Tool Calls</div>
+  </div>
+  <div class="card red">
+    <div class="num" id="c-errors">–</div>
+    <div class="lbl">Errors</div>
+  </div>
+</div>
+
+<!-- Two-column: events + ralph log -->
+<div class="cols">
+
+  <!-- Recent events parsed from ralph-events.jsonl -->
+  <div class="panel">
+    <div class="panel-header">
+      Recent Events
+      <span class="count" id="events-count">0</span>
+    </div>
+    <div class="panel-body" id="events-list">
+      <div class="empty">No events yet.</div>
+    </div>
+  </div>
+
+  <!-- Ralph phase log -->
+  <div class="panel">
+    <div class="panel-header">
+      Phase Log
+      <span class="count" id="log-lines">0 lines</span>
+    </div>
+    <div id="ralph-log"><span style="color:var(--muted)">Loading ralph.log…</span></div>
+  </div>
+
+</div>
+
+<!-- Activity log (full width) -->
+<div class="panel">
+  <div class="panel-header">
+    Tool Activity
+    <span class="count" id="activity-count">0 lines</span>
+  </div>
+  <div id="activity-log"><span style="color:var(--muted)">Loading activity.log…</span></div>
+</div>
+
+<footer>
+  <span>Logs: <code>../.claude/logs/</code></span>
+  <span>Serve: <code>cd .claude &amp;&amp; python3 -m http.server 3001</code></span>
+  <span>Open: <code>http://localhost:3001/monitoring/dashboard.html</code></span>
+  <span>Auto-refresh: 30s</span>
+</footer>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const REFRESH_MS   = 30_000;
+const LOG_FILE     = '../logs/ralph.log';
+const EVENTS_FILE  = '../logs/ralph-events.jsonl';
+const ACTIVITY_FILE = '../logs/activity.log';
+const STATS_FILE   = '../logs/ralph-stats.json';
+
+// ── Fetch helpers ────────────────────────────────────────────────────────────
+async function fetchText(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) return null;
+    return await r.text();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJSON(url) {
+  const t = await fetchText(url);
+  if (!t) return null;
+  try { return JSON.parse(t.trim()); } catch { return null; }
+}
+
+// ── Stats cards ──────────────────────────────────────────────────────────────
+async function loadStats() {
+  const s = await fetchJSON(STATS_FILE);
+  if (s) {
+    set('c-queue',   s.queue        ?? '–');
+    set('c-inprog',  s.in_progress  ?? '–');
+    set('c-done',    s.completed    ?? '–');
+    set('c-blocked', s.blocked      ?? '–');
+    set('c-calls',   s.total_tool_calls ?? '–');
+    set('c-errors',  s.tool_errors  ?? '–');
+  }
+}
+
+// ── Events panel ─────────────────────────────────────────────────────────────
+const EVENT_ICONS = {
+  task_started:   { icon: '▶', cls: 'SELECT'  },
+  task_completed: { icon: '✓', cls: 'DONE'    },
+  task_blocked:   { icon: '✗', cls: 'FAILED'  },
+  test_failed:    { icon: '✗', cls: 'FAILED'  },
+  committed:      { icon: '⬡', cls: 'COMMIT'  },
+};
+
+async function loadEvents() {
+  const text = await fetchText(EVENTS_FILE);
+  const container = document.getElementById('events-list');
+  const countEl   = document.getElementById('events-count');
+
+  if (!text || !text.trim()) {
+    container.innerHTML = '<div class="empty">No events yet.<code># Events appear here once Ralph starts running.</code></div>';
+    countEl.textContent = '0';
+    return;
+  }
+
+  const lines = text.trim().split('\n').filter(Boolean);
+  const events = lines.map(l => { try { return JSON.parse(l); } catch { return null; } })
+                       .filter(Boolean)
+                       .reverse()   // newest first
+                       .slice(0, 50);
+
+  countEl.textContent = lines.length;
+
+  if (!events.length) {
+    container.innerHTML = '<div class="empty">No events yet.</div>';
+    return;
+  }
+
+  container.innerHTML = events.map(ev => {
+    const meta  = EVENT_ICONS[ev.event] || { icon: '·', cls: 'IMPL' };
+    const ts    = ev.ts ? new Date(ev.ts).toLocaleTimeString() : '';
+    const task  = ev.task  ? `TASK:${ev.task}` : '';
+    const hash  = ev.hash  ? ` [${ev.hash}]` : '';
+    const runner = ev.runner ? ` (${ev.runner})` : '';
+    return `
+      <div class="event">
+        <div class="event-icon">${meta.icon}</div>
+        <div class="event-body">
+          <div class="event-title">
+            <span class="badge ${meta.cls}">${meta.cls}</span>
+            ${ev.event}${hash}${runner}
+          </div>
+          <div class="event-meta">${task}${task && ts ? ' · ' : ''}${ts}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Phase log ────────────────────────────────────────────────────────────────
+const PHASE_COLORS = {
+  SELECT: 'log-SELECT', PLAN: 'log-PLAN', IMPL: 'log-IMPL',
+  VERIFY: 'log-VERIFY', COMMIT: 'log-COMMIT', DONE: 'log-DONE',
+  CHKPT:  'log-CHKPT',
+};
+
+function colorizeLogLine(line) {
+  // Detect phase token like "SELECT  →" or "VERIFY   →"
+  const m = line.match(/\]\s+(SELECT|PLAN|IMPL|VERIFY|COMMIT|DONE|CHKPT)\s+→/);
+  const cls = m ? (PHASE_COLORS[m[1]] || '') : '';
+  if (line.includes('FAILED') || line.includes('BLOCKED') || line.includes('ERROR')) {
+    return `<span class="log-error">${esc(line)}</span>`;
+  }
+  return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+}
+
+async function loadRalphLog() {
+  const text  = await fetchText(LOG_FILE);
+  const el    = document.getElementById('ralph-log');
+  const count = document.getElementById('log-lines');
+
+  if (!text || !text.trim()) {
+    el.innerHTML = '<span style="color:var(--muted)">No log entries yet.\n\nralph.log will appear here once Ralph starts running.</span>';
+    count.textContent = '0 lines';
+    return;
+  }
+
+  const lines = text.trim().split('\n').filter(Boolean);
+  count.textContent = `${lines.length} lines`;
+
+  // Show the last 200 lines, newest at top
+  const display = [...lines].reverse().slice(0, 200);
+  el.innerHTML = display.map(colorizeLogLine).join('\n');
+  el.scrollTop = 0;
+
+  // Status dot: active if last entry is recent (< 5 min)
+  const lastLine = lines[lines.length - 1] || '';
+  const tsMatch  = lastLine.match(/\[(\d{4}-\d{2}-\d{2}T[\d:]+Z)\]/);
+  const dot      = document.getElementById('status-dot');
+  if (tsMatch) {
+    const age = Date.now() - new Date(tsMatch[1]).getTime();
+    dot.className = age < 5 * 60 * 1000 ? 'active' : '';
+  }
+}
+
+// ── Activity log ─────────────────────────────────────────────────────────────
+async function loadActivity() {
+  const text = await fetchText(ACTIVITY_FILE);
+  const el   = document.getElementById('activity-log');
+  const cnt  = document.getElementById('activity-count');
+
+  if (!text || !text.trim()) {
+    el.innerHTML = '<span style="color:var(--muted)">No activity recorded yet.</span>';
+    cnt.textContent = '0 lines';
+    return;
+  }
+
+  const lines = text.trim().split('\n').filter(Boolean);
+  cnt.textContent = `${lines.length} lines`;
+
+  // Last 150 lines, newest at top
+  const display = [...lines].reverse().slice(0, 150);
+  el.innerHTML = display.map(line => {
+    const isErr = line.includes(' err ');
+    return `<span class="${isErr ? 'act-err' : 'act-ok'}">${esc(line)}</span>`;
+  }).join('\n');
+  el.scrollTop = 0;
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Refresh cycle ────────────────────────────────────────────────────────────
+async function refresh() {
+  await Promise.all([loadStats(), loadEvents(), loadRalphLog(), loadActivity()]);
+
+  const now = new Date().toLocaleTimeString();
+  document.getElementById('refresh-info').textContent = `Last updated: ${now} · refreshes every 30s`;
+}
+
+// Initial load + interval
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+
+</body>
+</html>

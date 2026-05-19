@@ -29,3 +29,4 @@ class Project(Base):
     owner: Mapped["User"] = relationship("User", back_populates="owned_projects")
     tasks: Mapped[list["Task"]] = relationship("Task", back_populates="project")
     labels: Mapped[list["Label"]] = relationship("Label", back_populates="project")
+    sprints: Mapped[list["Sprint"]] = relationship("Sprint", back_populates="project")
