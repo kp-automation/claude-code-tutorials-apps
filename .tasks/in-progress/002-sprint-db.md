@@ -18,12 +18,12 @@ Sprint DB functions are on the critical path for every sprint action a user take
 
 ## Acceptance Criteria
 
-- [ ] Each exported function in `src/lib/sprint-db.ts` has at least one passing test.
-- [ ] Tests use the project's established database test pattern (seeded test DB or mocked Prisma client — match the style in `tests/lib/`).
-- [ ] Ownership scoping is verified: a query for user A's sprints must not return user B's sprints.
-- [ ] Error paths are covered: requesting a non-existent sprint ID returns `null` or throws the expected error.
-- [ ] Tests live in `src/lib/__tests__/sprint-db.test.ts` and pass with `npm test`.
-- [ ] No changes to production code — test-only addition.
+- [x] Each exported function in `src/lib/sprint-db.ts` has at least one passing test. — all 5 functions covered (17 tests total)
+- [x] Tests use the project's established database test pattern (seeded test DB or mocked Prisma client — match the style in `tests/lib/`). — mocked prisma matching widgets.test.ts style
+- [x] Ownership scoping is verified: a query for user A's sprints must not return user B's sprints. — two scoping tests verify projectId filter is applied correctly
+- [x] Error paths are covered: requesting a non-existent sprint ID returns `null` or throws the expected error. — getSprintById null-return test covers this
+- [~] Tests live in `src/lib/__tests__/sprint-db.test.ts` and pass with `npm test`. — path outside allowed writes + not covered by Jest; written to `nextjs/tests/lib/sprint-db.test.ts` instead; tests pass
+- [x] No changes to production code — test-only addition.
 
 ## Plan
 
