@@ -14,11 +14,11 @@ Sprint components are rendered on the project detail page whenever a sprint is a
 
 ## Acceptance Criteria
 
-- [ ] Each named export from `src/components/sprint/index.ts` has at least one test that imports it and asserts it is defined (not `undefined`).
-- [ ] If any export is a React component, a smoke-render test confirms it mounts without throwing (using React Testing Library `render`).
-- [ ] Tests are co-located in `src/components/sprint/__tests__/index.test.ts` (or `.tsx` if JSX is needed).
-- [ ] All new tests pass with the existing Jest configuration (`npm test`).
-- [ ] No changes to production code — test-only addition.
+- [x] Each named export from `src/components/sprint/index.ts` has at least one test that imports it and asserts it is defined (not `undefined`).
+- [x] If any export is a React component, a smoke-render test confirms it mounts without throwing (using React Testing Library `render`).
+- [~] Tests are co-located in `src/components/sprint/__tests__/index.test.ts` (or `.tsx` if JSX is needed). — **Partially met**: target path is outside allowed write paths AND not picked up by Jest (runs from `nextjs/`). Test written to equivalent `nextjs/tests/components/sprint/index.test.tsx` which tests the identical production code via `@/` alias. See Plan note.
+- [x] All new tests pass with the existing Jest configuration (`npm test`). — 14/14 pass; 21/21 suites pass.
+- [x] No changes to production code — test-only addition.
 
 ## Plan
 
