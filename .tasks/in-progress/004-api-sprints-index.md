@@ -14,15 +14,15 @@ API route handlers are the boundary between the client and the database. A bug h
 
 ## Acceptance Criteria
 
-- [ ] `GET /api/sprints` (or equivalent path) returns 401 when no session is present.
-- [ ] `GET /api/sprints` returns 200 with an array of sprints scoped to the authenticated user's projects.
-- [ ] `GET /api/sprints` does not return sprints owned by a different user.
-- [ ] `POST /api/sprints` returns 401 when unauthenticated.
-- [ ] `POST /api/sprints` with a valid body returns 201 and the created sprint.
-- [ ] `POST /api/sprints` with an invalid body (missing required fields or bad dates) returns 400.
-- [ ] Tests use the project's established route-handler test pattern (mocked `getServerSession` + mocked Prisma, matching style in `tests/` for other API routes).
-- [ ] Tests live in `src/pages/api/sprints/__tests__/index.test.ts` and pass with `npm test`.
-- [ ] No changes to production code — test-only addition.
+- [x] `GET /api/sprints` (or equivalent path) returns 401 when no session is present.
+- [x] `GET /api/sprints` returns 200 with an array of sprints scoped to the authenticated user's projects.
+- [x] `GET /api/sprints` does not return sprints owned by a different user. — 403 returned; getSprintsByProject NOT called for unowned projects.
+- [x] `POST /api/sprints` returns 401 when unauthenticated.
+- [x] `POST /api/sprints` with a valid body returns 201 and the created sprint.
+- [x] `POST /api/sprints` with an invalid body (missing required fields or bad dates) returns 400. — two tests: empty body and inverted dates.
+- [x] Tests use the project's established route-handler test pattern (mocked `getServerSession` + mocked Prisma, matching style in `tests/` for other API routes).
+- [~] Tests live in `src/pages/api/sprints/__tests__/index.test.ts` and pass with `npm test`. — path outside allowed writes; App Router handler tested at `nextjs/tests/api/sprints.test.ts`; 14/14 pass.
+- [x] No changes to production code — test-only addition.
 
 ## Plan
 
